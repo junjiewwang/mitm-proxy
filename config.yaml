@@ -1,0 +1,30 @@
+# yunapi-proxy 配置
+server:
+  listen: ":8080"
+
+# tapm-api 后端地址
+backend:
+  url: "http://127.0.0.1:16686"
+  # 后端统一入口路径（ForwardYunAPI 注册的路径）
+  api_path: "/api/v1"
+  timeout: 30s
+
+# Mock 认证信息（模拟 yunapi 注入的字段）
+mock_auth:
+  uin: "1500000686"
+  sub_account_uin: "700001199694"
+  app_id: 251005942
+
+# regionId 到 Region 字符串的映射
+region_map:
+  1: "ap-guangzhou"
+  4: "ap-shanghai"
+  8: "ap-beijing"
+  9: "ap-singapore"
+  11: "ap-shenzhen"
+  15: "ap-chengdu"
+  16: "ap-chongqing"
+  19: "ap-hongkong"
+  21: "na-siliconvalley"
+  22: "na-ashburn"
+  25: "ap-bangkok"
