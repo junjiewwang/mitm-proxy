@@ -137,6 +137,8 @@ func (p *ForwardProxy) shouldIntercept(hostname string) bool {
 
 // handleTunnel 直接透传隧道（不解密）
 func (p *ForwardProxy) handleTunnel(w http.ResponseWriter, r *http.Request, targetHost string) {
+	recordTraceTunnel(targetHost)
+
 	// 解析上游地址（优先使用配置的映射）
 	hostname, port := splitHostPort(targetHost)
 	upstreamAddr := p.getUpstreamAddr(hostname)
@@ -149,7 +151,8 @@ func (p *ForwardProxy) handleTunnel(w http.ResponseWriter, r *http.Request, targ
 	log.Printf("[Proxy] Tunnel: %s -> %s", targetHost, upstreamAddr)
 
 	// 连接上游服务器
-	destConn, err := net.DialTimeout("tcp", upstreamAddr, 10*time.Second)
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	destConn, err := dialer.Dial("tcp", upstreamAddr)
 	if err != nil {
 		http.Error(w, "Failed to connect to target", http.StatusBadGateway)
 		log.Printf("[Proxy] Tunnel dial failed: %s -> %v", upstreamAddr, err)
@@ -157,8 +160,9 @@ func (p *ForwardProxy) handleTunnel(w http.ResponseWriter, r *http.Request, targ
 	}
 	defer destConn.Close()
 
-	// TCP keep-alive 保持连接稳定
+	// TCP 优化：禁用 Nagle + keep-alive（否则 TLS 小包被延迟合并，CDN 判定超时）
 	if tcpConn, ok := destConn.(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
 		tcpConn.SetKeepAlive(true)
 		tcpConn.SetKeepAlivePeriod(30 * time.Second)
 	}
@@ -175,6 +179,11 @@ func (p *ForwardProxy) handleTunnel(w http.ResponseWriter, r *http.Request, targ
 		return
 	}
 	defer clientConn.Close()
+
+	// TCP_NODELAY: 浏览器端 TLS 小包也立即发送
+	if tcpConn, ok := clientConn.(*net.TCPConn); ok {
+		tcpConn.SetNoDelay(true)
+	}
 
 	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
@@ -294,6 +303,8 @@ func (p *ForwardProxy) shouldInterceptRequest(r *http.Request) bool {
 
 // handleInterceptedRequest 处理被拦截的请求（转发到本地后端）
 func (p *ForwardProxy) handleInterceptedRequest(conn net.Conn, r *http.Request) {
+	startTime := time.Now()
+
 	// 读取请求体
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -322,6 +333,9 @@ func (p *ForwardProxy) handleInterceptedRequest(conn net.Conn, r *http.Request) 
 	httpResp.Header.Set("Content-Length", fmt.Sprintf("%d", len(resp.body)))
 	httpResp.Header.Set("Access-Control-Allow-Origin", "*")
 	httpResp.Write(conn)
+
+	// 诊断追踪
+	recordTraceIntercept(r.URL.Query().Get("cmd"), resp.statusCode, time.Since(startTime))
 }
 
 // forwardToOriginal 透传请求到原始目标服务器（使用连接池复用 TLS 连接）
@@ -408,6 +422,14 @@ func (p *ForwardProxy) forwardToOriginal(conn net.Conn, r *http.Request, hostnam
 		Close:         r.Close,
 	}
 	httpResp.Write(conn)
+
+	// 诊断追踪
+	recordTraceFWD(method, path, resp.StatusCode, time.Since(startTime), true, "")
+}
+
+// recordFWDErr 记录错误追踪
+func recordFWDErr(method, path string, elapsed time.Duration, errMsg string) {
+	recordTraceFWD(method, path, 0, elapsed, false, errMsg)
 }
 
 // isHopByHop 判断是否为 hop-by-hop 头（不应转发）
