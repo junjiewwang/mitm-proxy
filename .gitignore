@@ -1,3 +1,4 @@
 .vscode/
 yunapi-proxy
 __debug_bin*
+certs/
