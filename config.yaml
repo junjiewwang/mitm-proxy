@@ -15,6 +15,19 @@ mock_auth:
   sub_account_uin: "700001199694"
   app_id: 251005942
 
+# 正向代理配置（用于 SwitchyOmega 直连模式）
+proxy:
+  enable: true
+  listen: ":8081"
+  cert_dir: "certs"
+  # Whistle 格式的 hosts 文件（IP domain 格式）
+  hosts_file: "hosts.txt"
+  # 需要 MITM 拦截的域名（只对这些域名解密 HTTPS）
+  intercept_domains:
+    - "console.cloud.tencent.com"
+  # 额外的上游服务器映射（与 hosts_file 合并生效）
+  upstream_map: {}
+
 # regionId 到 Region 字符串的映射
 region_map:
   1: "ap-guangzhou"

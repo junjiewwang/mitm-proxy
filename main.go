@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -25,6 +27,14 @@ type Config struct {
 		SubAccountUin string `yaml:"sub_account_uin"`
 		AppId         int    `yaml:"app_id"`
 	} `yaml:"mock_auth"`
+	Proxy struct {
+		Enable           bool              `yaml:"enable"`
+		Listen           string            `yaml:"listen"`
+		CertDir          string            `yaml:"cert_dir"`
+		HostsFile        string            `yaml:"hosts_file"`
+		InterceptDomains []string          `yaml:"intercept_domains"`
+		UpstreamMap      map[string]string `yaml:"upstream_map"`
+	} `yaml:"proxy"`
 	RegionMap map[int]string `yaml:"region_map"`
 }
 
@@ -50,7 +60,90 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.Backend.Timeout == 0 {
 		cfg.Backend.Timeout = 30 * time.Second
 	}
+	// 代理默认值
+	if cfg.Proxy.Listen == "" {
+		cfg.Proxy.Listen = ":8081"
+	}
+	if cfg.Proxy.CertDir == "" {
+		cfg.Proxy.CertDir = "certs"
+	}
+	if len(cfg.Proxy.InterceptDomains) == 0 {
+		cfg.Proxy.InterceptDomains = []string{"console.cloud.tencent.com"}
+	}
+	// 加载 hosts 文件（Whistle 格式：IP domain）
+	if cfg.Proxy.UpstreamMap == nil {
+		cfg.Proxy.UpstreamMap = make(map[string]string)
+	}
+	if cfg.Proxy.HostsFile != "" {
+		if err := loadHostsFile(cfg.Proxy.HostsFile, cfg.Proxy.UpstreamMap); err != nil {
+			log.Printf("[Config] WARNING: load hosts file %s: %v", cfg.Proxy.HostsFile, err)
+		} else {
+			log.Printf("[Config] Loaded %d host mappings from %s", len(cfg.Proxy.UpstreamMap), cfg.Proxy.HostsFile)
+		}
+	}
 	return &cfg, nil
+}
+
+// loadHostsFile 解析 Whistle 格式的 hosts 文件（IP domain 格式）
+// 支持格式：
+//
+//	9.223.72.139 console.cloud.tencent.com
+//	9.223.72.139 buy.cloud.tencent.com  # 注释
+func loadHostsFile(path string, upstreamMap map[string]string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open hosts file: %w", err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	lineNo := 0
+	for scanner.Scan() {
+		lineNo++
+		line := strings.TrimSpace(scanner.Text())
+
+		// 跳过空行和注释
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// 去除行内注释
+		if idx := strings.Index(line, "#"); idx > 0 {
+			line = strings.TrimSpace(line[:idx])
+		}
+
+		// 解析 "IP domain" 格式
+		// 支持多个域名用空格分隔: 9.223.72.139 a.com b.com
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue // 格式不合法
+		}
+
+		ip := fields[0]
+		// 判断是否合法 IP（简单判断）
+		if !strings.Contains(ip, ".") && !strings.Contains(ip, ":") {
+			continue
+		}
+
+		// 对每个域名建立映射
+		for _, domain := range fields[1:] {
+			// 跳过包含路径的规则（如 cloud.tencent.com/password/recover）
+			if strings.Contains(domain, "/") {
+				continue
+			}
+			// 跳过 proxy:// 规则
+			if strings.HasPrefix(domain, "proxy://") {
+				continue
+			}
+			addr := ip
+			if !strings.Contains(addr, ":") {
+				addr += ":443"
+			}
+			upstreamMap[domain] = addr
+		}
+	}
+
+	return scanner.Err()
 }
 
 func main() {
@@ -73,6 +166,20 @@ func main() {
 
 	// 创建 handler
 	h := newHandler(cfg)
+
+	// 启动正向代理（如果启用）
+	if cfg.Proxy.Enable {
+		proxy, err := NewForwardProxy(cfg, h)
+		if err != nil {
+			log.Fatalf("Failed to create forward proxy: %v", err)
+		}
+		go func() {
+			if err := proxy.ListenAndServe(cfg.Proxy.Listen); err != nil {
+				log.Fatalf("Forward proxy failed: %v", err)
+			}
+		}()
+		log.Printf("  Proxy: %s (intercept: %v)", cfg.Proxy.Listen, cfg.Proxy.InterceptDomains)
+	}
 
 	// 启动 Gin 服务
 	gin.SetMode(gin.DebugMode)
