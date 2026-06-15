@@ -1,6 +1,6 @@
 # yunapi-proxy 配置
 server:
-  listen: ":8080"
+  listen: ":8082"
 
 # tapm-api 后端地址
 backend:
