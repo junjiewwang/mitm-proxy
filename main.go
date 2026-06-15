@@ -164,12 +164,17 @@ func main() {
 	log.Printf("  MockAuth: Uin=%s, SubAccountUin=%s, AppId=%d",
 		cfg.MockAuth.Uin, cfg.MockAuth.SubAccountUin, cfg.MockAuth.AppId)
 
+	// 初始化诊断收集器
+	initDebugCollector()
+
 	// 创建 handler
 	h := newHandler(cfg)
 
 	// 启动正向代理（如果启用）
+	var proxy *ForwardProxy
 	if cfg.Proxy.Enable {
-		proxy, err := NewForwardProxy(cfg, h)
+		var err error
+		proxy, err = NewForwardProxy(cfg, h)
 		if err != nil {
 			log.Fatalf("Failed to create forward proxy: %v", err)
 		}
@@ -186,13 +191,29 @@ func main() {
 	engine := gin.New()
 	engine.Use(gin.Logger(), gin.Recovery())
 
-	// 注册路由 - 匹配前端发送的路径
+	// 注册路由
 	engine.POST("/cgi/capi", h.HandleCAPI)
-
-	// 健康检查
 	engine.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// 诊断面板 + MCP Server
+	if proxy != nil {
+		registerDebugRoutes(engine, defaultCollector, proxy.connMgr, cfg)
+		registerMCPRoutes(engine, &mcpServer{
+			collector: defaultCollector,
+			connMgr:   proxy.connMgr,
+			cfg:       cfg,
+			handler:   h,
+		})
+	} else {
+		registerDebugRoutes(engine, defaultCollector, nil, cfg)
+		registerMCPRoutes(engine, &mcpServer{
+			collector: defaultCollector,
+			cfg:       cfg,
+			handler:   h,
+		})
+	}
 
 	if err := engine.Run(cfg.Server.Listen); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
