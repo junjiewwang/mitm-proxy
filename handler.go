@@ -97,7 +97,7 @@ type proxyResponse struct {
 	body       []byte
 }
 
-// processRequest 处理正向代理拦截的请求
+// processRequest 处理正向代理拦截的请求（yunapi 格式）
 func (h *handler) processRequest(body []byte) *proxyResponse {
 	result, err := h.runPipeline("[Proxy]", body)
 	if err != nil {
