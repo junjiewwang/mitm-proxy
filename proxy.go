@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -250,10 +252,70 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 		log.Printf("[Proxy] MITM session closed: %s (alive %.1fs)", hostname, time.Since(startTime).Seconds())
 	}()
 
-	// 从 TLS 连接读取 HTTP 请求
+	// ==========================================
+	// 并发请求处理 + 有序响应写回
+	// ==========================================
+	//
+	// 设计思路：
+	//   HTTP/1.1 要求响应顺序与请求顺序严格一致（RFC 7230 §6.3.2 管线化规则）。
+	//   但请求处理耗时不同（有的 500ms，有的 5s），串行处理会让快请求被慢请求阻塞。
+	//
+	//   解决方案：读取请求后立即用 goroutine 并发处理，每个请求分配递增序号，
+	//   响应通过 channel 发到 writer goroutine，writer 按序号顺序写回 TLS 连接。
+	//
+	//   ┌─ reader ─┐    ┌─ worker pool ─┐    ┌─ writer ─┐
+	//   │ ReadReq  │───>│ go process(1) │───>│          │
+	//   │ ReadReq  │───>│ go process(2) │───>│ 按序号   │──> tlsConn
+	//   │ ReadReq  │───>│ go process(3) │───>│ 顺序写回 │
+	//   └──────────┘    └───────────────┘    └──────────┘
+
+	type pendingResponse struct {
+		seq  int            // 请求序号（从 0 开始递增）
+		resp *http.Response // 构建好的 HTTP 响应
+	}
+
 	reader := bufio.NewReader(tlsConn)
 	requestCount := 0
 
+	// 响应通道：worker 处理完后发送到此通道
+	respChan := make(chan pendingResponse, 32)
+
+	// writer goroutine：按序号顺序写回响应
+	var writerWg sync.WaitGroup
+	writerWg.Add(1)
+	go func() {
+		defer writerWg.Done()
+		nextSeq := 0
+		pending := make(map[int]*http.Response) // 乱序到达的响应暂存
+
+		for pr := range respChan {
+			pending[pr.seq] = pr.resp
+
+			// 按序号连续写出
+			for {
+				resp, ok := pending[nextSeq]
+				if !ok {
+					break // 下一个序号还没到，等待
+				}
+				delete(pending, nextSeq)
+
+				if err := resp.Write(tlsConn); err != nil {
+					log.Printf("[Proxy] MITM write response seq=%d failed: %v", nextSeq, err)
+					return // 写失败，连接已断，退出 writer
+				}
+				// 关闭 Body 释放资源
+				if resp.Body != nil {
+					resp.Body.Close()
+				}
+				nextSeq++
+			}
+		}
+	}()
+
+	// worker WaitGroup：确保所有并发请求处理完后再关闭 respChan
+	var workerWg sync.WaitGroup
+
+	// reader 循环：读取请求，分发到 goroutine 并发处理
 	for {
 		// 首个请求：5s 超时（快速关闭空闲连接）
 		// 后续请求：30s 超时（保持 keep-alive 复用）
@@ -265,8 +327,10 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 
 		req, err := http.ReadRequest(reader)
 		if err != nil {
-			return // EOF 或超时，正常退出
+			break // EOF 或超时，正常退出 reader 循环
 		}
+
+		seq := requestCount
 		requestCount++
 
 		// 标记连接活跃（LRU 提升）
@@ -276,16 +340,47 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 		req.URL.Scheme = "https"
 		req.URL.Host = hostname
 
-		// 判断是否需要拦截这个请求
-		if p.shouldInterceptRequest(req) {
-			log.Printf("[Proxy] *** INTERCEPTED: %s %s", req.Method, req.URL.String())
-			p.handleInterceptedRequest(tlsConn, req)
-			// 继续读取下一个请求，支持多路复用
-		} else {
-			// 透传到原始目标
-			p.forwardToOriginal(tlsConn, req, hostname)
+		// 预读请求体到内存，避免 goroutine 中读取时 reader 已被下一个请求覆盖
+		var bodyBytes []byte
+		if req.Body != nil {
+			bodyBytes, err = io.ReadAll(req.Body)
+			req.Body.Close()
+			if err != nil {
+				log.Printf("[Proxy] MITM read body failed seq=%d: %v", seq, err)
+				// 发送错误响应
+				respChan <- pendingResponse{
+					seq:  seq,
+					resp: buildErrorResponse(http.StatusBadRequest, "read body failed"),
+				}
+				continue
+			}
+			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			req.ContentLength = int64(len(bodyBytes))
 		}
+
+		// 并发处理请求
+		workerWg.Add(1)
+		go func(seq int, req *http.Request) {
+			defer workerWg.Done()
+
+			var resp *http.Response
+			if p.shouldInterceptRequest(req) {
+				log.Printf("[Proxy] *** INTERCEPTED [seq=%d]: %s %s", seq, req.Method, req.URL.String())
+				resp = p.processIntercept(req)
+			} else {
+				resp = p.processForward(req, hostname)
+			}
+
+			respChan <- pendingResponse{seq: seq, resp: resp}
+		}(seq, req)
 	}
+
+	// reader 结束后，等待所有 worker 完成，再关闭 respChan
+	workerWg.Wait()
+	close(respChan)
+
+	// 等待 writer 把所有响应写完
+	writerWg.Wait()
 }
 
 // shouldInterceptRequest 判断是否拦截此 HTTP 请求
@@ -301,45 +396,45 @@ func (p *ForwardProxy) shouldInterceptRequest(r *http.Request) bool {
 	return query.Get("serviceType") == "apm" && query.Get("action") == "delegate"
 }
 
-// handleInterceptedRequest 处理被拦截的请求（转发到本地后端）
-func (p *ForwardProxy) handleInterceptedRequest(conn net.Conn, r *http.Request) {
+// processIntercept 处理被拦截的请求，返回构建好的 HTTP 响应（不直接写 conn）
+func (p *ForwardProxy) processIntercept(r *http.Request) *http.Response {
 	startTime := time.Now()
 
-	// 读取请求体
+	// 读取请求体（handleMITM 中已预读到内存，这里可安全读取）
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeErrorResponse(conn, http.StatusBadRequest, "read body failed")
-		return
+		recordTraceIntercept(r.URL.Query().Get("cmd"), http.StatusBadRequest, time.Since(startTime))
+		return buildErrorResponse(http.StatusBadRequest, "read body failed")
 	}
 	r.Body.Close()
 
 	// 使用现有 handler 逻辑处理
 	resp := p.handler.processRequest(body)
 
-	// 写回响应
-	// 根据客户端 Connection 头决定是否保持连接（浏览器 keep-alive 复用，curl close 立即断开）
-	closeConn := strings.EqualFold(r.Header.Get("Connection"), "close")
+	// 构建 HTTP 响应
 	httpResp := &http.Response{
-		StatusCode: resp.statusCode,
-		Status:     http.StatusText(resp.statusCode),
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     make(http.Header),
-		Body:       io.NopCloser(strings.NewReader(string(resp.body))),
-		Close:      closeConn,
+		StatusCode:    resp.statusCode,
+		Status:        http.StatusText(resp.statusCode),
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(bytes.NewReader(resp.body)),
+		ContentLength: int64(len(resp.body)),
 	}
 	httpResp.Header.Set("Content-Type", "application/json; charset=utf-8")
 	httpResp.Header.Set("Content-Length", fmt.Sprintf("%d", len(resp.body)))
 	httpResp.Header.Set("Access-Control-Allow-Origin", "*")
-	httpResp.Write(conn)
 
 	// 诊断追踪
 	recordTraceIntercept(r.URL.Query().Get("cmd"), resp.statusCode, time.Since(startTime))
+
+	return httpResp
 }
 
-// forwardToOriginal 透传请求到原始目标服务器（使用连接池复用 TLS 连接）
-func (p *ForwardProxy) forwardToOriginal(conn net.Conn, r *http.Request, hostname string) {
+// processForward 透传请求到原始目标服务器，返回构建好的 HTTP 响应（不直接写 conn）
+// 注意：返回的 resp.Body 需要调用方在写完后 Close，以释放上游连接回连接池
+func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Response {
 	startTime := time.Now()
 	method := r.Method
 	path := r.URL.Path
@@ -359,8 +454,8 @@ func (p *ForwardProxy) forwardToOriginal(conn net.Conn, r *http.Request, hostnam
 	proxyReq, err := http.NewRequest(method, upstreamURL, body)
 	if err != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> CREATE ERR: %v", method, path, err)
-		writeErrorResponse(conn, http.StatusBadGateway, "create upstream request failed")
-		return
+		recordTraceFWD(method, path, 0, time.Since(startTime), false, err.Error())
+		return buildErrorResponse(http.StatusBadGateway, "create upstream request failed")
 	}
 
 	// 复制 Header（排除 hop-by-hop），保留必要的 Host
@@ -386,10 +481,9 @@ func (p *ForwardProxy) forwardToOriginal(conn net.Conn, r *http.Request, hostnam
 	resp, err := p.pooledClient.Do(proxyReq)
 	if err != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> ERR (%.0fms): %v", method, path, time.Since(startTime).Seconds()*1000, err)
-		writeErrorResponse(conn, http.StatusBadGateway, "upstream request failed")
-		return
+		recordTraceFWD(method, path, 0, time.Since(startTime), false, err.Error())
+		return buildErrorResponse(http.StatusBadGateway, "upstream request failed")
 	}
-	defer resp.Body.Close()
 
 	sizeStr := fmt.Sprintf("%d bytes", resp.ContentLength)
 	if resp.ContentLength < 0 {
@@ -397,6 +491,17 @@ func (p *ForwardProxy) forwardToOriginal(conn net.Conn, r *http.Request, hostnam
 	}
 	log.Printf("[Proxy] [FWD] %s %s -> %d (%s, %.0fms)",
 		method, path, resp.StatusCode, sizeStr, time.Since(startTime).Seconds()*1000)
+
+	// 读取响应体到内存（并发模式下需要在 goroutine 中完成读取，
+	// 否则上游连接不能及时归还连接池）
+	respBody, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close() // 立即释放上游连接回连接池
+
+	if readErr != nil {
+		log.Printf("[Proxy] [FWD] %s %s -> read body ERR: %v", method, path, readErr)
+		recordTraceFWD(method, path, resp.StatusCode, time.Since(startTime), false, readErr.Error())
+		return buildErrorResponse(http.StatusBadGateway, "read upstream response failed")
+	}
 
 	// 复制响应 Header（排除 hop-by-hop）
 	respHeader := make(http.Header)
@@ -409,27 +514,37 @@ func (p *ForwardProxy) forwardToOriginal(conn net.Conn, r *http.Request, hostnam
 		}
 	}
 
-	// 构建并写回响应
+	// 构建 HTTP 响应（Body 已读入内存，可安全在 writer goroutine 中写出）
 	httpResp := &http.Response{
 		StatusCode:    resp.StatusCode,
 		Status:        resp.Status,
-		Proto:         resp.Proto,
-		ProtoMajor:    resp.ProtoMajor,
-		ProtoMinor:    resp.ProtoMinor,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
 		Header:        respHeader,
-		Body:          resp.Body,
-		ContentLength: resp.ContentLength, // 关键：否则默认 0 导致大响应截断
-		Close:         r.Close,
+		Body:          io.NopCloser(bytes.NewReader(respBody)),
+		ContentLength: int64(len(respBody)),
 	}
-	httpResp.Write(conn)
 
 	// 诊断追踪
 	recordTraceFWD(method, path, resp.StatusCode, time.Since(startTime), true, "")
+
+	return httpResp
 }
 
-// recordFWDErr 记录错误追踪
-func recordFWDErr(method, path string, elapsed time.Duration, errMsg string) {
-	recordTraceFWD(method, path, 0, elapsed, false, errMsg)
+// buildErrorResponse 构建错误 HTTP 响应（用于并发模式下返回给 writer goroutine）
+func buildErrorResponse(statusCode int, message string) *http.Response {
+	body := fmt.Sprintf(`{"code":-1,"message":"%s"}`, message)
+	return &http.Response{
+		StatusCode:    statusCode,
+		Status:        http.StatusText(statusCode),
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        http.Header{"Content-Type": {"application/json"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
 }
 
 // isHopByHop 判断是否为 hop-by-hop 头（不应转发）
@@ -490,14 +605,6 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
-}
-
-// writeErrorResponse 写入错误响应
-func writeErrorResponse(conn net.Conn, statusCode int, message string) {
-	body := fmt.Sprintf(`{"code":-1,"message":"%s"}`, message)
-	resp := fmt.Sprintf("HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s",
-		statusCode, http.StatusText(statusCode), len(body), body)
-	conn.Write([]byte(resp))
 }
 
 // splitHostPort 分割 host:port，返回 hostname 和 port
