@@ -18,9 +18,12 @@
 
 ## 核心功能
 
-1. **正向代理 + MITM**：对 `console.cloud.tencent.com` 进行 HTTPS 拦截解密
+1. **正向代理 + MITM**：对 `console.cloud.tencent.com` 和 `console-hc.cloud.tencent.com` 进行 HTTPS 拦截解密
 2. **请求分流**：APM API 请求拦截转发到本地后端，其他请求透传到真实后端
-3. **请求格式转换**：前端格式 `{cmd, serviceType, data}` → 后端格式 `{Action, Uin, ...data字段}`
+3. **双格式拦截**：
+   - **yunapi 格式**：`POST /cgi/capi?action=delegate&serviceType=apm` — 经 yunapi 格式转换后转发
+   - **直连 API 格式**：`/_api/apm/{Action}` — 直接转发到后端，响应原样返回
+4. **请求格式转换**（yunapi 格式）：前端格式 `{cmd, serviceType, data}` → 后端格式 `{Action, Uin, ...data字段}`
 4. **认证信息注入**：模拟 yunapi 注入 Uin、SubAccountUin、AppId
 5. **Region 映射**：regionId(数字) → Region(字符串)
 6. **响应包装**：后端响应 → 前端期望的嵌套格式
@@ -81,6 +84,10 @@ security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain 
 - [x] TCP_NODELAY 修复 CDN 隧道卡死问题
 - [x] 诊断面板 + MCP Server
 - [x] **MITM 请求并发处理优化**（2026-06-17）
+- [x] **支持 console-hc 直连 API 拦截**（2026-06-17）
+- [x] **直连 API 复用完整拆包组包 pipeline**（2026-06-17）
+- [x] **CORS 预检（OPTIONS）支持**（2026-06-17）
+- [x] **死代码清理**：删除 `handler.processDirectRequest`、移除 `proxy.go` 多余的 `encoding/json` 导入（2026-06-17）
 
 ## 性能优化记录
 
@@ -114,3 +121,8 @@ security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain 
 - 响应包装格式可能需要根据实际联调情况微调（不同接口的后端返回格式可能有细微差异）
 - 如遇到特殊接口需要额外处理，可在 handler.go 中按 Action 分支处理
 - 可进一步优化：SwitchyOmega 配置精准代理规则，让无关域名完全绕过代理
+
+## 通用化重构计划
+
+项目计划从"腾讯云 APM 联调专用工具"重构为通用的 MITM 正向代理框架，
+详见 [通用化重构方案 — Roadmap](refactor-roadmap.md)。
