@@ -25,6 +25,7 @@ proxy:
   # 需要 MITM 拦截的域名（只对这些域名解密 HTTPS）
   intercept_domains:
     - "console.cloud.tencent.com"
+    - "console-hc.cloud.tencent.com"
   # 额外的上游服务器映射（与 hosts_file 合并生效）
   upstream_map: {}
 
