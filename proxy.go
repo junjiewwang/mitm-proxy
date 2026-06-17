@@ -364,10 +364,14 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 			defer workerWg.Done()
 
 			var resp *http.Response
-			if p.shouldInterceptRequest(req) {
+			switch p.classifyRequest(req) {
+			case interceptYunAPI:
 				log.Printf("[Proxy] *** INTERCEPTED [seq=%d]: %s %s", seq, req.Method, req.URL.String())
 				resp = p.processIntercept(req)
-			} else {
+			case interceptDirectAPI:
+				log.Printf("[Proxy] *** DIRECT-API [seq=%d]: %s %s", seq, req.Method, req.URL.String())
+				resp = p.processDirectAPI(req)
+			default:
 				resp = p.processForward(req, hostname)
 			}
 
@@ -383,17 +387,31 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 	writerWg.Wait()
 }
 
-// shouldInterceptRequest 判断是否拦截此 HTTP 请求
-func (p *ForwardProxy) shouldInterceptRequest(r *http.Request) bool {
-	// 只拦截 POST /cgi/capi?action=delegate&serviceType=apm
-	if r.Method != http.MethodPost {
-		return false
+// interceptType 拦截类型
+type interceptType int
+
+const (
+	interceptNone      interceptType = iota // 不拦截（透传到上游）
+	interceptYunAPI                         // yunapi 格式：POST /cgi/capi?action=delegate&serviceType=apm
+	interceptDirectAPI                      // 直连 API 格式：/_api/apm/{Action}
+)
+
+// classifyRequest 判断请求的拦截类型
+func (p *ForwardProxy) classifyRequest(r *http.Request) interceptType {
+	// 规则 1：yunapi 格式 — POST /cgi/capi?action=delegate&serviceType=apm
+	if r.Method == http.MethodPost && r.URL.Path == "/cgi/capi" {
+		query := r.URL.Query()
+		if query.Get("serviceType") == "apm" && query.Get("action") == "delegate" {
+			return interceptYunAPI
+		}
 	}
-	if r.URL.Path != "/cgi/capi" {
-		return false
+
+	// 规则 2：直连 API 格式 — /_api/apm/{Action}（GET 或 POST）
+	if strings.HasPrefix(r.URL.Path, "/_api/apm/") {
+		return interceptDirectAPI
 	}
-	query := r.URL.Query()
-	return query.Get("serviceType") == "apm" && query.Get("action") == "delegate"
+
+	return interceptNone
 }
 
 // processIntercept 处理被拦截的请求，返回构建好的 HTTP 响应（不直接写 conn）
@@ -428,6 +446,60 @@ func (p *ForwardProxy) processIntercept(r *http.Request) *http.Response {
 
 	// 诊断追踪
 	recordTraceIntercept(r.URL.Query().Get("cmd"), resp.statusCode, time.Since(startTime))
+
+	return httpResp
+}
+
+// processDirectAPI 处理直连 API 格式的拦截请求
+// URL 格式：/_api/apm/{Action}?uin=...&ownerUin=...&其他参数
+// 请求体格式与 yunapi 相同：{cmd, serviceType, data, regionId, uin, ownerUin}
+// 需要复用 handler 的拆包（buildBackendRequest）+ 组包（wrapResponse）逻辑
+func (p *ForwardProxy) processDirectAPI(r *http.Request) *http.Response {
+	// CORS 预检请求（OPTIONS）：直接返回允许跨域的响应
+	// 浏览器从 console.cloud.tencent.com 跨域请求 console-hc.cloud.tencent.com 时，
+	// 会先发 OPTIONS 预检，必须返回正确的 CORS 头才能继续发实际请求
+	if r.Method == http.MethodOptions {
+		return p.buildCORSPreflightResponse(r)
+	}
+
+	startTime := time.Now()
+
+	// 从路径提取 Action（用于日志，实际 Action 由 body 中的 cmd 字段决定）
+	action := strings.TrimPrefix(r.URL.Path, "/_api/apm/")
+	if action == "" {
+		recordTraceIntercept("unknown", http.StatusBadRequest, time.Since(startTime))
+		return buildErrorResponse(http.StatusBadRequest, "missing action in path")
+	}
+
+	// 读取请求体
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		recordTraceIntercept(action, http.StatusBadRequest, time.Since(startTime))
+		return buildErrorResponse(http.StatusBadRequest, "read body failed")
+	}
+	r.Body.Close()
+
+	// 复用 handler 的完整 pipeline（拆包 + 转发 + 组包）
+	// body 格式与 yunapi 相同：{cmd, serviceType, data, regionId, uin, ownerUin}
+	resp := p.handler.processRequest(body)
+
+	// 构建 HTTP 响应
+	httpResp := &http.Response{
+		StatusCode:    resp.statusCode,
+		Status:        http.StatusText(resp.statusCode),
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(bytes.NewReader(resp.body)),
+		ContentLength: int64(len(resp.body)),
+	}
+	httpResp.Header.Set("Content-Type", "application/json; charset=utf-8")
+	httpResp.Header.Set("Content-Length", fmt.Sprintf("%d", len(resp.body)))
+	setCORSHeaders(httpResp.Header, r)
+
+	// 诊断追踪
+	recordTraceIntercept(action, resp.statusCode, time.Since(startTime))
 
 	return httpResp
 }
@@ -530,6 +602,44 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	recordTraceFWD(method, path, resp.StatusCode, time.Since(startTime), true, "")
 
 	return httpResp
+}
+
+// buildCORSPreflightResponse 构建 CORS 预检（OPTIONS）响应
+// 浏览器跨域请求前会先发 OPTIONS，必须返回正确的 CORS 头才允许后续实际请求
+func (p *ForwardProxy) buildCORSPreflightResponse(r *http.Request) *http.Response {
+	resp := &http.Response{
+		StatusCode:    http.StatusNoContent,
+		Status:        http.StatusText(http.StatusNoContent),
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(strings.NewReader("")),
+		ContentLength: 0,
+	}
+	setCORSHeaders(resp.Header, r)
+
+	// 预检专用头
+	resp.Header.Set("Access-Control-Max-Age", "86400") // 缓存预检结果 24h，减少 OPTIONS 请求
+
+	log.Printf("[Proxy] CORS preflight: %s %s -> 204 (origin: %s)", r.Method, r.URL.Path, r.Header.Get("Origin"))
+	return resp
+}
+
+// setCORSHeaders 设置 CORS 响应头（预检和实际请求共用）
+// 注意：Access-Control-Allow-Credentials: true 时，Origin 不能用 *，必须回显请求的 Origin
+func setCORSHeaders(h http.Header, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = "*"
+	}
+	h.Set("Access-Control-Allow-Origin", origin)
+	h.Set("Access-Control-Allow-Credentials", "true")
+	h.Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	h.Set("Access-Control-Allow-Headers", r.Header.Get("Access-Control-Request-Headers"))
+	if h.Get("Access-Control-Allow-Headers") == "" {
+		h.Set("Access-Control-Allow-Headers", "Content-Type, X-Lid, X-Life, Authorization")
+	}
 }
 
 // buildErrorResponse 构建错误 HTTP 响应（用于并发模式下返回给 writer goroutine）
