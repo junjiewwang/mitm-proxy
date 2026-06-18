@@ -1,6 +1,7 @@
 # yunapi-proxy 通用化重构方案 — Roadmap
 
-> 创建时间：2026-06-17
+> 创建时间：2026-06-17  
+> 最后更新：2026-06-18  
 > 状态：方案设计完成，待实施
 
 ---
@@ -8,17 +9,20 @@
 ## 一、重构目标
 
 将 yunapi-proxy 从"腾讯云 APM 联调专用工具"重构为**通用的 MITM 正向代理框架**，
-业务逻辑作为可插拔的**适配器**通过配置 + 接口注入，向开源项目演进。
+以**统一规则脚本引擎**为核心，支持多规则脚本隔离、动态启停、Web UI 管理，
+打造类似 Whistle 的使用体验，同时保留 Pipeline 拆包/组包能力作为差异化优势。
 
 ### 设计原则
 
 | 原则 | 具体要求 |
 |------|---------|
-| **高内聚低耦合** | 代理核心层不包含任何业务逻辑，通过接口与适配器交互 |
-| **开闭原则 (OCP)** | 新增业务场景只需实现适配器接口 + 添加配置，不改核心代码 |
-| **依赖倒置 (DIP)** | 核心层定义接口，适配器层实现接口，通过依赖注入组装 |
-| **单一职责 (SRP)** | 每个包/文件只负责一个明确的职责 |
-| **配置驱动** | 拦截规则、字段映射、认证注入等全部通过配置文件声明 |
+| **高内聚低耦合** | 代理核心层不包含任何业务逻辑，通过接口与规则引擎/处理器交互 |
+| **开闭原则 (OCP)** | 新增规则类型只需实现新 Processor，不改核心代码 |
+| **依赖倒置 (DIP)** | 核心层定义接口，规则引擎/处理器层实现接口，通过依赖注入组装 |
+| **单一职责 (SRP)** | Parser 只解析、Manager 只管理、Engine 只匹配、Processor 只执行 |
+| **配置与逻辑分离** | 所有业务规则在 `rules/` 目录管理，`config.yaml` 只保留系统级配置 |
+| **隔离性** | 多脚本独立作用域，启停互不影响；优先级决定冲突时的覆盖顺序 |
+| **健壮性** | 单脚本解析失败不影响其他；热更新用写锁 + 原子替换，编译失败回滚 |
 
 ---
 
@@ -39,6 +43,8 @@
 | 9 | `debug.go` `recordTraceFWD/recordTraceIntercept` | 硬编码 `Host: console.cloud.tencent.com` | 🟢 低 |
 | 10 | `mcp.go` `toolCurl` | `serviceType=apm`, `DescribeMetricRecords` 等 APM 接口名 | 🟢 低 |
 | 11 | `main.go` `Config` 结构体 | `MockAuth`, `RegionMap` 与通用代理配置混在一起 | 🟢 低 |
+| 12 | `main.go` `loadHostsFile` | hosts 解析逻辑与配置加载耦合 | 🟡 中 |
+| 13 | `proxy.go` `shouldIntercept` | 域名列表硬编码在 config，无法动态管理 | 🟡 中 |
 
 ### 2.2 通用 vs 业务特定 代码占比
 
@@ -57,72 +63,93 @@
 
 ## 三、目标架构
 
-### 3.1 分层设计
+### 3.1 架构总览
+
+以**统一规则脚本引擎**为核心，所有代理行为（hosts 映射、MITM 拦截域名、API 拦截、静态资源代理）
+全部通过规则脚本声明，规则引擎作为代理核心与处理器之间的调度枢纽。
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      配置层 (config.yaml)                    │
-│   通用代理配置 + 拦截规则 + Pipeline 声明 + 适配器参数        │
-└──────────────────────────┬──────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Web UI (管理面板)                                │
+│                                                                              │
+│  规则脚本列表（启停/编辑/统计）+ 实时日志（SSE） + 系统状态                    │
+└──────────────────────────┬───────────────────────────────────────────────────┘
+                           │ REST API
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                    Rule Manager (规则管理器)                                   │
+│                                                                              │
+│  规则脚本 CRUD · 启停控制 · 规则解析 · 热加载 · 规则校验 · 持久化             │
+└──────────────────────────┬───────────────────────────────────────────────────┘
+                           │ 编译后的规则集
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                    Rule Engine (规则匹配引擎)                                  │
+│                                                                              │
+│  职责：                                                                       │
+│    - ShouldIntercept(hostname) — MITM 域名判断（合并所有 @intercept）          │
+│    - ResolveUpstream(hostname) — hosts 映射解析（高优先级覆盖低优先级）        │
+│    - Match(req) → MatchResult  — 按优先级匹配规则（第一条命中即停止）          │
+│                                                                              │
+│  实现接口：InterceptMatcher + UpstreamResolver                                │
+└──────────────────────────┬───────────────────────────────────────────────────┘
+                           │ 分发到处理器
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                       Processors (处理器集合)                                  │
+│                                                                              │
+│  ┌─────────────────┐  ┌──────────────────┐  ┌──────────────────────┐        │
+│  │ ProxyProcessor  │  │ PipelineProcessor│  │ StreamProcessor      │        │
+│  │                 │  │                  │  │                      │        │
+│  │ 正则 → URL 重写 │  │ pipeline://name  │  │ @stream 标记的       │        │
+│  │ 反向代理        │  │ 拆包/认证/转发/  │  │ SSE/chunked 流式代理 │        │
+│  │                 │  │ 组包             │  │                      │        │
+│  └─────────────────┘  └──────────────────┘  └──────────────────────┘        │
+│                                                                              │
+│  每种处理器实现 RequestProcessor 接口                                         │
+│  新规则类型 = 新 Processor（开闭原则）                                        │
+└──────────────────────────┬───────────────────────────────────────────────────┘
                            │
-┌──────────────────────────▼──────────────────────────────────┐
-│                    代理核心层 (proxy/)                        │
-│                                                              │
-│  ForwardProxy · MITM 并发处理 · TCP 隧道 · 连接池            │
-│  CA 证书管理 · LRU 连接管理 · 有序响应写回                    │
-│                                                              │
-│  接口定义（interfaces.go）：                                  │
-│    InterceptMatcher     — 请求是否需要拦截                    │
-│    RequestProcessor     — 拦截后如何处理（Pipeline 编排入口） │
-│    TraceRecorder        — 请求追踪记录                        │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ 依赖注入
-┌──────────────────────────▼──────────────────────────────────┐
-│                  Pipeline 处理引擎 (pipeline/)                │
-│                                                              │
-│  ┌─ RequestTransformer ─┐  ┌─ AuthInjector ─┐               │
-│  │  拆包：提取/重命名/   │  │  认证信息注入   │               │
-│  │  扁平化嵌套字段       │  │  （可选阶段）   │               │
-│  └───────────────────────┘  └────────────────┘               │
-│  ┌─ Forwarder ───────────┐  ┌─ ResponseTransformer ─┐       │
-│  │  转发到后端           │  │  组包：包装/重命名/     │       │
-│  │  （通用，各适配器复用）│  │  嵌套响应结构          │       │
-│  └───────────────────────┘  └────────────────────────┘       │
-│                                                              │
-│  Pipeline 编排器：按配置声明的阶段列表顺序执行               │
-│  每个阶段可独立替换、跳过、或叠加多个实例                    │
-└──────────────────────────┬──────────────────────────────────┘
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                    代理核心层 (proxy/)                                         │
+│                                                                              │
+│  ForwardProxy · MITM 并发处理 · TCP 隧道 · 连接池                            │
+│  CA 证书管理 · LRU 连接管理 · 有序响应写回                                    │
+│                                                                              │
+│  核心接口依赖（通过依赖注入）：                                               │
+│    InterceptMatcher  — 域名是否需要 MITM                                     │
+│    UpstreamResolver  — hosts 映射解析                                        │
+│    RuleEngine.Match  — 请求匹配 + 分发到 Processor                           │
+│    TraceRecorder     — 请求追踪记录                                          │
+└──────────────────────────┬───────────────────────────────────────────────────┘
                            │ 组合
-┌──────────────────────────▼──────────────────────────────────┐
-│                     适配器层 (adapter/)                       │
-│                                                              │
-│  adapter/yunapi/        腾讯云 yunapi 适配器                   │
-│    ├── adapter.go         组装 Pipeline 阶段                  │
-│    ├── transformer.go     实现 RequestTransformer +           │
-│    │                      ResponseTransformer                 │
-│    ├── auth.go            实现 AuthInjector                   │
-│    └── config.go          yunapi 特有配置解析                  │
-│                                                              │
-│  adapter/generic/       通用适配器（URL 改写 + Header 注入）   │
-│    └── adapter.go         简单转发 / Mock（无需拆包组包）      │
-│                                                              │
-│  adapter/template/      模板驱动适配器（配置化拆包组包）       │
-│    └── adapter.go         基于 pipeline 配置声明式组装         │
-└──────────────────────────┬──────────────────────────────────┘
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                     Pipeline 处理引擎 (pipeline/)                              │
+│                                                                              │
+│  ┌─ RequestTransformer ─┐  ┌─ AuthInjector ─┐                               │
+│  │  拆包：提取/重命名/   │  │  认证信息注入   │                               │
+│  │  扁平化嵌套字段       │  │  （可选阶段）   │                               │
+│  └───────────────────────┘  └────────────────┘                               │
+│  ┌─ Forwarder ───────────┐  ┌─ ResponseTransformer ─┐                       │
+│  │  转发到后端           │  │  组包：包装/重命名/     │                       │
+│  │  （通用，各适配器复用）│  │  嵌套响应结构          │                       │
+│  └───────────────────────┘  └────────────────────────┘                       │
+│                                                                              │
+│  Pipeline 编排器：按配置声明的阶段列表顺序执行                               │
+│  每个阶段可独立替换、跳过、或叠加多个实例                                    │
+└──────────────────────────┬───────────────────────────────────────────────────┘
                            │
-┌──────────────────────────▼──────────────────────────────────┐
-│                      拦截规则引擎 (intercept/)                │
-│                                                              │
-│  基于配置的声明式规则匹配器（实现 InterceptMatcher）           │
-│  支持 method / path / path_prefix / query / header 组合匹配  │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                     适配器层 (adapter/)                                        │
+│                                                                              │
+│  adapter/yunapi/        腾讯云 yunapi 适配器（组装 Pipeline 阶段）              │
+│  adapter/generic/       通用适配器（URL 改写 + Header 注入）                   │
+│  adapter/template/      模板驱动适配器（配置化拆包组包）                       │
+└──────────────────────────┬───────────────────────────────────────────────────┘
                            │
-┌──────────────────────────▼──────────────────────────────────┐
-│                       诊断层 (debug/)                        │
-│                                                              │
-│  TraceCollector（环形缓冲区）· HTML Dashboard · MCP Server    │
-│  实现 TraceRecorder 接口，不依赖具体业务域名                  │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────▼───────────────────────────────────────────────────┐
+│                       诊断层 (debug/)                                         │
+│                                                                              │
+│  TraceCollector（环形缓冲区）· MCP Server                                     │
+│  实现 TraceRecorder 接口，不依赖具体业务域名                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 3.2 核心接口定义
@@ -130,37 +157,62 @@
 #### 3.2.1 代理核心层接口（proxy/interfaces.go）
 
 ```go
-// InterceptMatcher 请求拦截匹配器
-// 判断一个 MITM 解密后的 HTTP 请求是否需要被拦截处理
+// InterceptMatcher 域名拦截判断器
+// 判断一个 HTTPS CONNECT 请求的目标域名是否需要 MITM 解密
 type InterceptMatcher interface {
-    // Match 返回匹配的规则名，空字符串表示不匹配（透传到上游）
-    Match(r *http.Request) string
+    // ShouldIntercept 判断域名是否需要 MITM 拦截
+    // 数据来源：所有启用脚本的 @intercept 指令合并
+    ShouldIntercept(hostname string) bool
 }
 
-// RequestProcessor 被拦截请求的处理器（适配器的入口接口）
-// 代理核心层只依赖此接口，不关心内部是简单转发还是多阶段 Pipeline
+// UpstreamResolver hosts 映射解析器
+// 将域名解析为上游服务器地址（类似 hosts 文件的功能）
+type UpstreamResolver interface {
+    // ResolveUpstream 获取域名对应的上游地址
+    // 返回 "ip:port" 格式，ok=false 表示无映射（使用默认 DNS）
+    ResolveUpstream(hostname string) (addr string, ok bool)
+}
+
+// RequestMatcher 请求匹配器
+// 判断一个 MITM 解密后的 HTTP 请求是否命中某条规则
+type RequestMatcher interface {
+    // Match 返回匹配结果，matched=false 表示无规则命中（透传到上游）
+    Match(r *http.Request) (result *MatchResult, matched bool)
+}
+
+// RequestProcessor 被拦截请求的处理器
+// 代理核心层只依赖此接口，不关心内部实现
 type RequestProcessor interface {
     // Process 处理被拦截的请求，返回构建好的 HTTP 响应
-    // req: 原始请求（Body 已预读到内存，可安全重复读取）
-    // body: 预读的请求体字节
-    Process(req *http.Request, body []byte) *http.Response
+    Process(req *http.Request, body []byte, match *MatchResult) *http.Response
 }
 
 // TraceRecorder 请求追踪记录器（可选注入，nil 表示不记录）
 type TraceRecorder interface {
     RecordTunnel(targetHost string)
     RecordForward(method, path, host string, statusCode int, elapsed time.Duration, ok bool, errMsg string)
-    RecordIntercept(ruleName, action string, statusCode int, elapsed time.Duration)
+    RecordIntercept(scriptName, ruleName string, statusCode int, elapsed time.Duration)
+}
+
+// MatchResult 规则匹配结果
+type MatchResult struct {
+    ScriptID   string   // 所属脚本 ID
+    ScriptName string   // 所属脚本名称
+    RuleType   RuleType // 规则类型
+    RuleLine   int      // 规则行号（便于调试）
+    Captures   []string // 正则捕获组（$1~$9）
+    Target     string   // 目标地址模板（已替换捕获组后的最终 URL）
+    Adapter    string   // Pipeline 适配器名称（仅 RuleTypePipeline）
+    Stream     bool     // 是否流式传输
+    CORS       bool     // 是否处理 CORS
 }
 ```
 
 #### 3.2.2 Pipeline 阶段接口（pipeline/interfaces.go）
 
-将"拆包 → 认证注入 → 转发 → 组包"拆分为独立的阶段接口，每个阶段可独立替换、组合或跳过。
+将"拆包 → 认证注入 → 转发 → 组包"拆分为独立的阶段接口：
 
 ```go
-// ===== pipeline/interfaces.go =====
-
 // PipelineContext 贯穿整个 Pipeline 的上下文，各阶段通过它传递数据
 type PipelineContext struct {
     // 原始请求信息（只读）
@@ -179,54 +231,22 @@ type PipelineContext struct {
 }
 
 // RequestTransformer 请求转换器（拆包阶段）
-// 将客户端发来的原始请求体转换为后端期望的格式
-//
-// 职责示例：
-//   - yunapi 适配器：从 {cmd, serviceType, data} 提取并扁平化为 {Action, ApiModule, ...data字段}
-//   - generic 适配器：原样透传（不做任何转换）
-//   - 自定义适配器：字段重命名、嵌套字段提取、默认值填充
 type RequestTransformer interface {
-    // TransformRequest 将解析后的请求转换为后端请求格式
-    // 输入：ctx.ParsedRequest（JSON 解析后的原始请求）
-    // 输出：ctx.BackendRequest（转换后的后端请求体）
     TransformRequest(ctx *PipelineContext) error
 }
 
 // AuthInjector 认证信息注入器（可选阶段）
-// 向后端请求中注入认证、鉴权相关字段
-//
-// 职责示例：
-//   - yunapi 适配器：注入 Uin、SubAccountUin、AppId
-//   - 其他场景：注入 API Key、Bearer Token、签名等
 type AuthInjector interface {
-    // InjectAuth 向 BackendRequest 中注入认证信息
     InjectAuth(ctx *PipelineContext) error
 }
 
 // Forwarder 后端转发器
-// 将转换后的请求发送到后端服务并获取响应
-//
-// 框架提供默认实现（HTTPForwarder），适配器也可自定义：
-//   - 默认：HTTP POST JSON 转发
-//   - 自定义：gRPC 转发、多后端扇出、重试/降级等
 type Forwarder interface {
-    // Forward 转发请求到后端
-    // 输入：ctx.BackendRequest + ctx.BackendURL
-    // 输出：ctx.BackendResp
     Forward(ctx *PipelineContext) error
 }
 
 // ResponseTransformer 响应转换器（组包阶段）
-// 将后端响应转换为客户端期望的格式
-//
-// 职责示例：
-//   - yunapi 适配器：包装为三层嵌套 {code, data:{code, cgwerrorCode, data:{Response}}}
-//   - generic 适配器：原样透传后端响应
-//   - 自定义适配器：字段重命名、错误码映射、字段裁剪
 type ResponseTransformer interface {
-    // TransformResponse 将后端响应转换为客户端期望的格式
-    // 输入：ctx.BackendResp（后端原始响应）
-    // 输出：ctx.FinalResp（最终返回给客户端的响应）
     TransformResponse(ctx *PipelineContext) error
 }
 ```
@@ -234,518 +254,602 @@ type ResponseTransformer interface {
 #### 3.2.3 Pipeline 编排器（pipeline/pipeline.go）
 
 ```go
-// ===== pipeline/pipeline.go =====
-
 // Pipeline 请求处理管线
-// 按阶段顺序执行：解析 → 拆包 → 认证注入 → 转发 → 组包
-// 每个阶段可为 nil（跳过），也可叠加多个实例（链式执行）
+// 实现 RequestProcessor 接口（通过 PipelineProcessor 包装）
 type Pipeline struct {
-    // 必选阶段
     Forwarder            Forwarder
-
-    // 可选阶段（nil 表示跳过）
-    RequestTransformers  []RequestTransformer  // 支持多个转换器链式执行
-    AuthInjectors        []AuthInjector        // 支持多个注入器（如同时注入 auth + region）
-    ResponseTransformers []ResponseTransformer // 支持多个响应转换器
+    RequestTransformers  []RequestTransformer
+    AuthInjectors        []AuthInjector
+    ResponseTransformers []ResponseTransformer
 }
 
-// Process 实现 RequestProcessor 接口，执行完整 Pipeline
-func (p *Pipeline) Process(req *http.Request, body []byte) *http.Response {
+// Execute 执行完整 Pipeline
+func (p *Pipeline) Execute(req *http.Request, body []byte) *http.Response {
     ctx := &PipelineContext{
         OriginalRequest: req,
         RawBody:         body,
         Metadata:        make(map[string]any),
     }
 
-    // 1. 解析请求体
-    if err := json.Unmarshal(body, &ctx.ParsedRequest); err != nil {
-        return buildErrorResponse(400, "parse request body failed")
-    }
-
-    // 2. 拆包（RequestTransformers 链式执行）
-    for _, t := range p.RequestTransformers {
-        if err := t.TransformRequest(ctx); err != nil {
-            return buildErrorResponse(400, "transform request failed: "+err.Error())
-        }
-    }
-    // 如果没有配置 RequestTransformer，BackendRequest 直接用 ParsedRequest
-    if ctx.BackendRequest == nil {
-        ctx.BackendRequest = ctx.ParsedRequest
-    }
-
-    // 3. 认证注入（AuthInjectors 链式执行）
-    for _, a := range p.AuthInjectors {
-        if err := a.InjectAuth(ctx); err != nil {
-            return buildErrorResponse(500, "inject auth failed: "+err.Error())
-        }
-    }
-
-    // 4. 转发
-    if err := p.Forwarder.Forward(ctx); err != nil {
-        return buildErrorResponse(502, "forward failed: "+err.Error())
-    }
-
-    // 5. 组包（ResponseTransformers 链式执行）
-    ctx.FinalResp = ctx.BackendResp // 默认：原样返回
-    for _, t := range p.ResponseTransformers {
-        if err := t.TransformResponse(ctx); err != nil {
-            return buildErrorResponse(500, "transform response failed: "+err.Error())
-        }
-    }
-
-    return buildJSONResponse(200, ctx.FinalResp)
+    // 1. 解析请求体 → ctx.ParsedRequest
+    // 2. 拆包（RequestTransformers 链式执行）→ ctx.BackendRequest
+    // 3. 认证注入（AuthInjectors 链式执行）→ ctx.BackendRequest 含认证字段
+    // 4. 转发（Forwarder）→ ctx.BackendResp
+    // 5. 组包（ResponseTransformers 链式执行）→ ctx.FinalResp
+    // ... 实现细节见 Sprint 1
 }
 ```
 
 #### 3.2.4 适配器接口（adapter/interfaces.go）
 
 ```go
-// ===== adapter/interfaces.go =====
-
-// Adapter 适配器接口（组合 RequestProcessor + 生命周期管理）
-// 适配器内部通过组装 Pipeline 阶段实现 Process 方法
+// Adapter 适配器接口（组装 Pipeline 阶段）
 type Adapter interface {
-    RequestProcessor
-
-    // Name 适配器名称（用于日志和配置索引）
+    // Name 适配器名称（被 pipeline:// 规则引用）
     Name() string
-
-    // Init 初始化适配器（传入适配器配置段，组装 Pipeline）
+    // Init 初始化适配器（传入配置）
     Init(rawConfig map[string]any) error
-
-    // Routes 返回需要注册到管理服务的额外路由（可选）
-    Routes() []Route
-
+    // GetPipeline 返回组装好的 Pipeline
+    GetPipeline() *Pipeline
     // Close 清理资源
     Close() error
 }
+```
 
-// Route 适配器声明的 HTTP 路由
-type Route struct {
-    Method  string           // GET / POST / ANY
-    Path    string           // 路由路径
-    Handler http.HandlerFunc
+### 3.3 统一规则语法设计
+
+采用 Whistle 兼容的文本规则语法，扩展 `pipeline://` 和 `@` 指令：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     规则脚本语法                                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  1. Hosts 映射（兼容 Whistle）                                        │
+│     IP domain1 domain2 ...                                           │
+│     9.223.72.139 console.cloud.tencent.com                           │
+│                                                                      │
+│  2. 精确路径代理                                                      │
+│     domain/path  target                                              │
+│     console.cloud.tencent.com/cgi/capi  http://127.0.0.1:8082       │
+│                                                                      │
+│  3. 正则匹配代理（Whistle 风格）                                      │
+│     /regex/  target  [@options]                                       │
+│     /\/qcloud\/tea\/app\/(tapm[\w-]*)\.js$/  http://127.0.0.1:8322/$1.js │
+│                                                                      │
+│  4. Pipeline 代理（扩展语法）                                          │
+│     /regex/  pipeline://adapter_name  [@options]                      │
+│     /\/cgi\/capi\?.*serviceType=apm/  pipeline://yunapi               │
+│                                                                      │
+│  5. MITM 拦截域名声明                                                 │
+│     @intercept domain1 domain2 ...                                    │
+│     @intercept cloudcache.tencent-cloud.com                           │
+│                                                                      │
+│  6. 元指令                                                            │
+│     @name "脚本名称"                                                  │
+│     @priority 100        # 优先级（越高越先匹配）                     │
+│     @timeout 30s         # 全局超时                                   │
+│                                                                      │
+│  7. Options（附加在规则行尾）                                          │
+│     @stream   — SSE/chunked 流式代理                                  │
+│     @cors     — 自动处理 OPTIONS 预检                                 │
+│     @timeout=Xs — 单条规则超时覆盖                                    │
+│                                                                      │
+│  8. 注释                                                              │
+│     # 这是一行注释                                                    │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.4 规则脚本示例
+
+#### 脚本 1：`rules/apm-dev.rules`（APM 本地开发全套）
+
+```bash
+# =============================================
+# APM 本地联调规则
+# 包含：hosts映射 + API拦截 + 前端资源代理
+# =============================================
+@name "APM 本地开发"
+@priority 100
+
+# --- MITM 拦截域名声明 ---
+@intercept console.cloud.tencent.com
+@intercept console-hc.cloud.tencent.com
+@intercept cloudcache.tencent-cloud.com
+
+# --- Hosts 映射 ---
+9.223.72.139 console.cloud.tencent.com console-hc.cloud.tencent.com
+139.199.214.200 cloudcache.tencent-cloud.com
+
+# --- API 拦截（走 Pipeline 拆包/组包）---
+/\/cgi\/capi\?.*action=delegate&.*serviceType=apm/  pipeline://yunapi
+/\/_api\/apm\//  pipeline://yunapi  @cors
+
+# --- 前端资源代理（CDN → 本地 webpack-dev-server）---
+/\/qcloud\/tea\/app\/(tapm[\w-]*)(\.(zh|en|jp|ko|dev))?(\.\w{10})?\.(js|css)(\.map)?$/  http://127.0.0.1:8322/$1.$5$6
+/\/qcloud\/tea\/app\/(.+\/)?__webpack_hmr$/  http://127.0.0.1:8322/__webpack_hmr  @stream
+/\/qcloud\/tea\/app\/(.+\.)?(\w+)\.(hot-update\.(js|json))$/  http://127.0.0.1:8322/$1$2.$3
+```
+
+#### 脚本 2：`rules/cls-dev.rules`（CLS 产品联调，独立隔离）
+
+```bash
+@name "CLS 本地开发"
+@priority 90
+
+@intercept cloudcache.tencent-cloud.com
+
+# CLS 前端资源代理
+/\/qcloud\/tea\/app\/(cls[\w-]*)(\.\w{10})?\.(js|css)(\.map)?$/  http://127.0.0.1:9000/$1.$3$4
+/\/qcloud\/tea\/app\/(.+\/)?__webpack_hmr$/  http://127.0.0.1:9000/__webpack_hmr  @stream
+```
+
+#### 脚本 3：`rules/test-env.rules`（测试环境 hosts）
+
+```bash
+@name "测试环境 Hosts"
+@priority 50
+
+# 指向测试环境
+9.223.72.139 eb.qcloud.com
+9.223.72.139 buy.cloud.tencent.com
+9.223.72.139 api.cloud.tencent.com
+11.141.253.239 ap-guangzhou.cls.tencentcs.com
+```
+
+### 3.5 规则引擎核心数据结构
+
+#### 3.5.1 规则类型与规则对象（rule/types.go）
+
+```go
+// RuleType 规则类型枚举
+type RuleType int
+
+const (
+    RuleTypeHosts    RuleType = iota // IP domain — hosts 映射
+    RuleTypeProxy                    // /regex/ http://target — 正则代理
+    RuleTypePipeline                 // /regex/ pipeline://name — Pipeline 处理
+    RuleTypeExact                    // domain/path target — 精确路径代理
+)
+
+// Rule 单条解析后的规则
+type Rule struct {
+    Type     RuleType        // 规则类型
+    Line     int             // 源文件行号（便于错误定位）
+    Raw      string          // 原始文本
+
+    // Hosts 类型
+    IP       string          // 目标 IP
+    Domains  []string        // 域名列表
+
+    // Proxy/Pipeline/Exact 类型
+    Pattern  *regexp.Regexp  // URL path 正则（Proxy/Pipeline）
+    Domain   string          // 匹配域名（Exact）
+    Path     string          // 匹配路径（Exact）
+    Target   string          // 目标地址模板（支持 $1~$9 捕获组引用）
+    Adapter  string          // Pipeline 适配器名称（仅 RuleTypePipeline）
+
+    // Options（@标记）
+    Stream   bool            // @stream — SSE/chunked 流式代理
+    CORS     bool            // @cors — 自动处理 OPTIONS 预检
+    Timeout  time.Duration   // @timeout=Xs — 单条规则超时
 }
 ```
 
-#### 3.2.5 各适配器与 Pipeline 的关系
+#### 3.5.2 规则脚本（rule/script.go）
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Pipeline 阶段组合对比                        │
-├─────────────┬──────────────────┬─────────────────┬──────────────┤
-│   阶段       │ yunapi 适配器     │ generic 适配器   │ template 适配器│
-├─────────────┼──────────────────┼─────────────────┼──────────────┤
-│ 请求解析     │ JSON + form 双格式│ JSON            │ JSON          │
-│ RequestTrans │ ✅ 拆包：cmd→Action│ ❌ 跳过（透传） │ ✅ 配置驱动    │
-│             │ data 扁平化       │                 │ 字段映射规则   │
-│ AuthInjector│ ✅ Uin/AppId 注入 │ ✅ Header 注入   │ ✅ 配置声明    │
-│ Forwarder   │ HTTPForwarder    │ HTTPForwarder   │ HTTPForwarder │
-│ ResponseTrans│ ✅ 三层嵌套包装  │ ❌ 跳过（原样）  │ ✅ 模板驱动    │
-└─────────────┴──────────────────┴─────────────────┴──────────────┘
-```
+```go
+// RuleScript 一个规则脚本（对应一个 .rules 文件）
+type RuleScript struct {
+    ID        string        // 唯一标识（文件名去后缀）
+    Name      string        // @name 声明的名称
+    Priority  int           // @priority 声明的优先级（默认 0，高优先）
+    Enabled   bool          // 是否启用
+    FilePath  string        // 文件路径
 
-### 3.3 目标目录结构
+    // 解析结果
+    Intercepts []string     // @intercept 声明的域名列表
+    Rules      []Rule       // 解析后的规则列表（按文件顺序）
 
-```
-yunapi-proxy/
-├── main.go                        # 启动入口（组装各层组件）
-├── config.yaml                    # 统一配置文件
-├── hosts.txt                      # hosts 映射（可选）
-│
-├── proxy/                         # 【核心层】通用 MITM 正向代理
-│   ├── interfaces.go             #   核心接口（InterceptMatcher / RequestProcessor / TraceRecorder）
-│   ├── proxy.go                  #   ForwardProxy 主体（ServeHTTP / handleConnect / handleHTTP）
-│   ├── mitm.go                   #   MITM 并发处理 + 有序写回（handleMITM / processForward）
-│   ├── tunnel.go                 #   TCP 隧道透传（handleTunnel）
-│   ├── cert.go                   #   CA 证书管理（LoadOrGenerateCA / GenerateCert）
-│   ├── connmgr.go                #   LRU 连接管理器（ConnManager）
-│   ├── helpers.go                #   通用工具函数（isHopByHop / splitHostPort / buildErrorResponse / CORS）
-│   └── config.go                 #   代理层配置结构体（ProxyConfig）
-│
-├── pipeline/                      # 【Pipeline 处理引擎】请求处理管线
-│   ├── interfaces.go             #   阶段接口（RequestTransformer / AuthInjector / Forwarder / ResponseTransformer）
-│   ├── context.go                #   PipelineContext 上下文结构体
-│   ├── pipeline.go               #   Pipeline 编排器（实现 RequestProcessor，按阶段顺序执行）
-│   └── forwarder.go              #   HTTPForwarder 默认转发器实现（HTTP POST JSON）
-│
-├── intercept/                     # 【拦截规则引擎】声明式匹配
-│   ├── rule.go                   #   Rule 结构体 + 基于配置的 Match 逻辑
-│   └── engine.go                 #   RuleEngine（实现 InterceptMatcher，管理多条规则 + 适配器映射）
-│
-├── adapter/                       # 【适配器层】可插拔的业务实现
-│   ├── interfaces.go             #   Adapter 接口定义 + Route 结构体
-│   ├── registry.go               #   适配器注册表（Register / Get）
-│   │
-│   ├── yunapi/                   #   腾讯云 yunapi 适配器
-│   │   ├── adapter.go            #     实现 Adapter 接口，组装 Pipeline
-│   │   ├── transformer.go        #     实现 RequestTransformer（拆包）+ ResponseTransformer（组包）
-│   │   ├── auth.go               #     实现 AuthInjector（Uin/SubAccountUin/AppId + Region 注入）
-│   │   └── config.go             #     YunAPIConfig 结构体（auth / field_mapping / region_map）
-│   │
-│   ├── generic/                  #   通用转发适配器
-│   │   └── adapter.go            #     URL 改写 + Header 注入 + 无 Pipeline 直接透传
-│   │
-│   └── template/                 #   模板驱动适配器（配置化 Pipeline）
-│       ├── adapter.go            #     从配置文件声明式组装 Pipeline 各阶段
-│       ├── field_mapper.go       #     通用字段映射 RequestTransformer（配置驱动）
-│       └── response_wrapper.go   #     模板化 ResponseTransformer（配置驱动）
-│
-├── debug/                         # 【诊断层】
-│   ├── collector.go              #   TraceCollector（实现 TraceRecorder，环形缓冲区）
-│   ├── dashboard.go              #   HTML 诊断面板 + JSON API
-│   └── mcp.go                    #   MCP Server（JSON-RPC 2.0）
-│
-└── docs/
-    ├── yunapi-proxy.md            # 项目说明文档
-    └── refactor-roadmap.md        # 本文档
+    // 运行时统计
+    Stats      ScriptStats
+    ParseError error        // 解析错误（nil 表示正常）
+    UpdatedAt  time.Time    // 最后更新时间
+}
+
+// ScriptStats 脚本运行时统计
+type ScriptStats struct {
+    TotalHits   int64          // 总命中次数
+    LastHitAt   time.Time      // 最后命中时间
+    RuleHits    map[int]int64  // 每条规则的命中次数（按行号索引）
+}
 ```
 
-### 3.4 目标配置文件格式
+#### 3.5.3 规则管理器（rule/manager.go）
+
+```go
+// RuleManager 规则管理器
+// 职责：脚本 CRUD + 启停 + 热加载 + 持久化
+type RuleManager struct {
+    mu       sync.RWMutex
+    scripts  map[string]*RuleScript  // ID → Script
+    sorted   []*RuleScript           // 按 priority 降序排列
+    dir      string                  // 规则文件目录（rules/）
+    engine   *RuleEngine             // 变更时通知引擎重编译
+    watcher  *fsnotify.Watcher       // 文件监听（热加载）
+}
+
+// 公开 API（供 Web UI REST API 调用）
+func (m *RuleManager) List() []*RuleScript
+func (m *RuleManager) Get(id string) (*RuleScript, error)
+func (m *RuleManager) Create(name, content string) (*RuleScript, error)
+func (m *RuleManager) Update(id, content string) error
+func (m *RuleManager) Delete(id string) error
+func (m *RuleManager) Enable(id string) error
+func (m *RuleManager) Disable(id string) error
+func (m *RuleManager) Reload(id string) error
+func (m *RuleManager) ReloadAll() error
+func (m *RuleManager) Validate(content string) []ParseError
+```
+
+#### 3.5.4 规则匹配引擎（rule/engine.go）
+
+```go
+// RuleEngine 规则匹配引擎（线程安全，支持热更新）
+type RuleEngine struct {
+    mu              sync.RWMutex
+    compiledScripts []*CompiledScript  // 编译后的规则（按优先级排序）
+    interceptSet    map[string]bool    // 合并后的 MITM 域名集
+    hostsMap        map[string]string  // 合并后的 hosts 映射（高优先级覆盖）
+}
+
+// ShouldIntercept 实现 InterceptMatcher 接口
+// 合并所有启用脚本的 @intercept 域名取并集
+func (e *RuleEngine) ShouldIntercept(hostname string) bool
+
+// ResolveUpstream 实现 UpstreamResolver 接口
+// 高优先级脚本的 hosts 映射覆盖低优先级
+func (e *RuleEngine) ResolveUpstream(hostname string) (string, bool)
+
+// Match 实现 RequestMatcher 接口
+// 按优先级遍历脚本 → 按顺序匹配规则 → 第一条命中即停止
+func (e *RuleEngine) Match(r *http.Request) (*MatchResult, bool)
+
+// Recompile 热更新：Manager 调用，重新编译规则集
+// 使用写锁 + 原子替换，编译失败回滚
+func (e *RuleEngine) Recompile(scripts []*RuleScript)
+```
+
+#### 3.5.5 规则解析器（rule/parser.go）
+
+```go
+// Parser 规则文件解析器（Whistle 兼容扩展语法）
+type Parser struct{}
+
+// ParseFile 解析规则文件
+func (p *Parser) ParseFile(path string) (*RuleScript, error)
+
+// ParseContent 解析规则内容字符串（供 Web UI 实时校验）
+func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError)
+
+// ParseError 解析错误（单行级别，不阻止其他行）
+type ParseError struct {
+    Line    int
+    Column  int
+    Message string
+    Raw     string
+}
+
+// 解析规则：
+//   行首 "#"        → 注释，跳过
+//   行首 "@"        → 指令（@name / @priority / @intercept / @timeout）
+//   行首 "/"        → 正则规则（/regex/ target [@options]）
+//   行首 IP格式     → Hosts 映射（IP domain1 domain2 ...）
+//   行首 domain/    → 精确路径代理（domain/path target）
+//   空行            → 跳过
+```
+
+### 3.6 处理器设计
+
+#### 3.6.1 处理器类型
+
+| 处理器 | 规则类型 | 职责 | 适用场景 |
+|--------|---------|------|---------|
+| `ProxyProcessor` | RuleTypeProxy / RuleTypeExact | 正则/精确 URL 匹配 → 捕获组替换 → 反向代理 | 静态资源代理、URL 重写 |
+| `PipelineProcessor` | RuleTypePipeline | 调用命名适配器的 Pipeline 执行拆包/认证/转发/组包 | API 拦截转换 |
+| `StreamProcessor` | RuleTypeProxy（@stream） | SSE/chunked 流式反向代理（不读完 body） | Webpack HMR |
+
+#### 3.6.2 ProxyProcessor（正则代理 + 反向代理）
+
+```go
+// ProxyProcessor 正则匹配 → URL 重写 → 反向代理
+type ProxyProcessor struct {
+    httpClient *http.Client
+}
+
+func (p *ProxyProcessor) Process(req *http.Request, body []byte, match *MatchResult) *http.Response {
+    // match.Target 已是完成捕获组替换后的目标 URL
+    // 1. 创建代理请求
+    // 2. 复制 Header（排除 hop-by-hop）
+    // 3. 转发并返回响应
+}
+```
+
+#### 3.6.3 StreamProcessor（SSE 流式代理）
+
+```go
+// StreamProcessor 流式反向代理（SSE/chunked 长连接）
+type StreamProcessor struct {
+    httpClient *http.Client
+}
+
+func (s *StreamProcessor) Process(req *http.Request, body []byte, match *MatchResult) *http.Response {
+    // 1. 向目标地址发起请求
+    // 2. 不做 io.ReadAll — Body 保持为 io.ReadCloser 流
+    // 3. 返回 ContentLength: -1（chunked）
+    // writer goroutine 会流式写出 Body 到 TLS 连接
+    return &http.Response{
+        StatusCode:    resp.StatusCode,
+        Header:        filterHopByHop(resp.Header),
+        Body:          resp.Body,      // 流式传递
+        ContentLength: -1,             // chunked
+    }
+}
+```
+
+#### 3.6.4 PipelineProcessor（Pipeline 调度）
+
+```go
+// PipelineProcessor 调用命名适配器的 Pipeline
+type PipelineProcessor struct {
+    adapters map[string]Adapter  // 适配器注册表
+}
+
+func (p *PipelineProcessor) Process(req *http.Request, body []byte, match *MatchResult) *http.Response {
+    adapter, ok := p.adapters[match.Adapter]
+    if !ok {
+        return buildErrorResponse(500, "adapter not found: "+match.Adapter)
+    }
+    return adapter.GetPipeline().Execute(req, body)
+}
+```
+
+### 3.7 与代理核心层的集成
+
+```go
+// proxy/proxy.go（重构后）
+
+type ForwardProxy struct {
+    // 通用配置
+    certDir    string
+    connMgr    *ConnManager
+    httpClient *http.Client
+
+    // 通过依赖注入的接口（由 RuleEngine 实现）
+    interceptMatcher InterceptMatcher    // 域名是否 MITM
+    upstreamResolver UpstreamResolver    // hosts 映射
+    requestMatcher   RequestMatcher      // 请求规则匹配
+
+    // 处理器集合
+    processors map[RuleType]RequestProcessor
+
+    // 可选
+    traceRecorder TraceRecorder
+}
+
+// shouldIntercept → 委托给 RuleEngine
+func (p *ForwardProxy) shouldIntercept(hostname string) bool {
+    return p.interceptMatcher.ShouldIntercept(hostname)
+}
+
+// getUpstreamAddr → 委托给 RuleEngine
+func (p *ForwardProxy) getUpstreamAddr(hostname string) string {
+    if addr, ok := p.upstreamResolver.ResolveUpstream(hostname); ok {
+        return addr
+    }
+    return hostname + ":443"
+}
+
+// MITM worker → 委托给 RuleEngine + Processors
+// go func(seq, req) {
+//     result, matched := p.requestMatcher.Match(req)
+//     if matched {
+//         processor := p.processors[result.RuleType]
+//         resp = processor.Process(req, body, result)
+//     } else {
+//         resp = p.processForward(req, hostname)
+//     }
+// }
+```
+
+### 3.8 流式传输（HMR/SSE）设计要点
+
+`__webpack_hmr` 是 Server-Sent Events（SSE）长连接，需要特殊处理：
+
+1. **不读完 Body**：响应 Body 保持为 `io.ReadCloser` 流，`http.Response.Write` 会自动 chunked 写出
+2. **独立连接**：浏览器为 SSE 开独立 TCP 连接，不影响同域其他请求的并发
+3. **Writer 阻塞**：流式响应占用 MITM session 直到连接关闭；实际场景中，浏览器为 HMR 开独立连接，该 session 只服务于这一个流
+4. **超时排除**：`@stream` 规则不受全局 timeout 限制
+
+### 3.9 目标配置文件格式
+
+规则全部迁移到 `rules/` 目录后，`config.yaml` 只保留系统级配置：
 
 ```yaml
-# ===== 通用代理配置 =====
+# 代理核心配置（与业务规则完全分离）
 server:
-  listen: ":8082"
+  listen: ":8082"         # 管理服务 + Web UI + REST API
 
 proxy:
-  listen: ":8081"
-  cert_dir: "certs"
-  hosts_file: "hosts.txt"
-  upstream_map: {}
+  listen: ":8081"         # 代理端口
+  cert_dir: "certs"       # CA 证书目录
   max_connections: 100
   idle_timeout: 10s
-  intercept_domains:
-    - "console.cloud.tencent.com"
-    - "console-hc.cloud.tencent.com"
 
-# ===== 拦截规则（声明式，替代硬编码）=====
-# 规则按顺序匹配，第一条匹配即停止
-intercept_rules:
-  # 规则 1：yunapi 格式 — POST /cgi/capi?action=delegate&serviceType=apm
-  - name: "yunapi-apm"
-    match:
-      method: "POST"
-      path: "/cgi/capi"
-      query:
-        action: "delegate"
-        serviceType: "apm"
-    adapter: "yunapi"
+# 规则引擎配置
+rules:
+  dir: "rules"            # 规则脚本目录（每个 .rules 文件一个脚本）
+  hot_reload: true        # 是否监听文件变化自动重载
+  watch_interval: 2s      # 文件监听间隔
 
-  # 规则 2：直连 API 格式 — /_api/apm/{Action}（GET 或 POST）
-  # 使用 path_prefix 前缀匹配，同样走 yunapi 适配器（需要拆包组包）
-  - name: "direct-api-apm"
-    match:
-      path_prefix: "/_api/apm/"
-    adapter: "yunapi"
-    options:
-      cors: true   # 跨域场景自动处理 OPTIONS 预检
-
-# ===== 适配器配置（按名称索引）=====
+# Pipeline 适配器配置（被 pipeline:// 规则引用）
 adapters:
-  # ── yunapi 适配器 ──────────────────────────────────────────
-  # 使用内置 Pipeline：拆包 → 认证注入 → 转发 → 组包
   yunapi:
-    type: "yunapi"          # 适配器类型（对应 adapter/yunapi/）
-
-    # 后端转发配置（Forwarder 阶段）
+    type: "yunapi"
     backend:
       url: "http://127.0.0.1:16686"
       api_path: "/api/v1"
       timeout: 30s
+    auth:
+      uin: "1500000686"
+      sub_account_uin: "700001199694"
+      app_id: 251005942
+    region_map:
+      1: "ap-guangzhou"
+      4: "ap-shanghai"
+      8: "ap-beijing"
 
-    # Pipeline 配置
-    pipeline:
+# Web UI 配置
+webui:
+  enable: true
+  # 通过 server.listen 同端口访问（路径前缀 /ui/）
 
-      # ── 拆包阶段（RequestTransformer）──
-      # 将前端请求格式转换为后端扁平格式
-      request_transform:
-        # 顶层字段映射：前端字段名 → 后端字段名
-        field_mapping:
-          cmd: "Action"
-          serviceType: "ApiModule"
-
-        # 嵌套字段提取：将 data.* 扁平化到顶层
-        flatten_fields:
-          - source: "data"        # 源字段（嵌套 map）
-            target: "."           # "." 表示提取到顶层
-            strategy: "merge"     # merge: 合并到顶层; replace: 覆盖同名
-
-        # 保护字段：data 中的这些字段不允许覆盖已有的顶层字段
-        protected_fields:
-          - "Uin"
-          - "SubAccountUin"
-          - "AppId"
-          - "Action"
-          - "ApiModule"
-
-      # ── 认证注入阶段（AuthInjector）──
-      auth:
-        # 固定值注入（fallback，当请求中缺少时使用）
-        inject_fields:
-          Uin: "1500000686"
-          SubAccountUin: "700001199694"
-          AppId: 251005942
-
-        # 从请求字段映射（优先级高于固定值）
-        field_source:
-          Uin: "ownerUin"         # 请求中的 ownerUin → 后端的 Uin
-          SubAccountUin: "uin"    # 请求中的 uin → 后端的 SubAccountUin
-
-      # ── Region 映射（作为 RequestTransformer 的子阶段）──
-      region:
-        source_field: "regionId"  # 从请求中读取此字段
-        target_field: "Region"    # 写入后端请求的此字段
-        default: "ap-guangzhou"
-        mapping:
-          1: "ap-guangzhou"
-          4: "ap-shanghai"
-          8: "ap-beijing"
-
-      # ── 组包阶段（ResponseTransformer）──
-      # 将后端响应包装为前端期望的格式
-      response_transform:
-        # 包装模板：将后端原始响应包装为指定的嵌套结构
-        # ${backend_response} 是占位符，代表后端返回的原始 JSON
-        # ${error_code} 是从后端响应中提取的错误码
-        wrapper_template:
-          code: 0
-          data:
-            code: "${error_code}"
-            cgwerrorCode: 0
-            data:
-              Response: "${backend_response}"
-          mccode: 0
-          errObj: {}
-          seqId: "${generated_seq_id}"
-          reqId: "${generated_req_id}"
-
-        # 错误码提取规则：从后端响应中提取业务错误码
-        error_code_path: "Response.Error.Code"
-        error_code_default: 0
-
-  # ── generic 适配器（示例）──────────────────────────────────
-  # 无 Pipeline，简单透传
-  # my-mock:
-  #   type: "generic"
-  #   backend:
-  #     url: "http://127.0.0.1:9090"
-  #     timeout: 10s
-  #   headers:
-  #     X-Forwarded-By: "yunapi-proxy"
-
-  # ── template 适配器（示例）─────────────────────────────────
-  # 纯配置驱动的 Pipeline，不需要写 Go 代码
-  # my-custom-api:
-  #   type: "template"
-  #   backend:
-  #     url: "http://127.0.0.1:8080"
-  #     api_path: "/api"
-  #     timeout: 15s
-  #   pipeline:
-  #     request_transform:
-  #       field_mapping:
-  #         action: "Method"
-  #         params: "Parameters"
-  #     auth:
-  #       inject_fields:
-  #         ApiKey: "${env:MY_API_KEY}"    # 支持环境变量引用
-  #     response_transform:
-  #       wrapper_template:
-  #         success: true
-  #         result: "${backend_response}"
-
-# ===== 诊断配置 =====
+# 诊断配置
 debug:
   enable: true
   buffer_size: 500
   mcp_enable: true
 ```
 
-#### 3.4.1 Pipeline 配置说明
+### 3.10 目标目录结构
 
-| 配置段 | 对应 Pipeline 阶段 | 是否必填 | 说明 |
-|-------|-------------------|---------|------|
-| `pipeline.request_transform` | `RequestTransformer` | 否 | 不配置则原样透传请求体 |
-| `pipeline.request_transform.field_mapping` | 字段重命名 | 否 | `源字段: 目标字段` 映射 |
-| `pipeline.request_transform.flatten_fields` | 嵌套字段提取 | 否 | 将嵌套 map 扁平化到顶层 |
-| `pipeline.request_transform.protected_fields` | 字段保护 | 否 | 扁平化时不允许覆盖的字段 |
-| `pipeline.auth` | `AuthInjector` | 否 | 不配置则不注入认证信息 |
-| `pipeline.auth.inject_fields` | 固定值注入 | 否 | fallback 默认值 |
-| `pipeline.auth.field_source` | 字段来源映射 | 否 | 从请求中提取（优先级高于固定值） |
-| `pipeline.region` | `RequestTransformer`（子阶段） | 否 | 数字→字符串映射转换 |
-| `pipeline.response_transform` | `ResponseTransformer` | 否 | 不配置则原样返回后端响应 |
-| `pipeline.response_transform.wrapper_template` | 响应包装模板 | 否 | 支持 `${占位符}` 引用 |
-| `pipeline.response_transform.error_code_path` | 错误码提取 | 否 | JSONPath 风格的路径表达式 |
+```
+yunapi-proxy/
+├── main.go                     # 启动入口：加载配置 → 创建 Manager/Engine → 注入到 Proxy → 启动
+├── config.yaml                 # 精简的系统级配置
+│
+├── rules/                      # 规则脚本目录（每个文件一个独立脚本）
+│   ├── apm-dev.rules          #   APM 本地开发规则
+│   ├── cls-dev.rules          #   CLS 本地开发规则（示例）
+│   └── test-env.rules         #   测试环境 hosts
+│
+├── rule/                       # 【规则引擎包】高内聚
+│   ├── types.go               #   Rule / RuleType / MatchResult 类型定义
+│   ├── script.go              #   RuleScript + ScriptStats 结构体
+│   ├── parser.go              #   规则文件解析器（Whistle 兼容扩展语法）
+│   ├── validator.go           #   规则校验（语法 + 正则合法性 + 适配器引用检查）
+│   ├── manager.go             #   RuleManager（CRUD + 启停 + 热加载 + 文件监听）
+│   └── engine.go              #   RuleEngine（匹配 + 域名/hosts 合并 + 读写锁）
+│
+├── processor/                  # 【处理器包】根据规则类型分发执行
+│   ├── interfaces.go          #   RequestProcessor 接口定义
+│   ├── proxy.go               #   ProxyProcessor（正则 → URL 重写 → 反向代理）
+│   ├── pipeline.go            #   PipelineProcessor（调用适配器 Pipeline）
+│   ├── stream.go              #   StreamProcessor（SSE/chunked 流式代理）
+│   └── registry.go            #   处理器注册表（RuleType → Processor 映射）
+│
+├── proxy/                      # 【代理核心包】通用 MITM 正向代理
+│   ├── interfaces.go          #   InterceptMatcher / UpstreamResolver / RequestMatcher / TraceRecorder
+│   ├── proxy.go               #   ForwardProxy 主体（ServeHTTP / handleConnect / handleHTTP）
+│   ├── mitm.go                #   MITM 并发处理 + 有序响应写回
+│   ├── tunnel.go              #   TCP 隧道透传
+│   ├── cert.go                #   CA 证书管理
+│   ├── connmgr.go             #   LRU 连接管理器
+│   ├── helpers.go             #   通用工具函数（isHopByHop / splitHostPort / CORS）
+│   └── config.go              #   ProxyConfig 结构体
+│
+├── pipeline/                   # 【Pipeline 处理引擎】
+│   ├── interfaces.go          #   阶段接口（RequestTransformer / AuthInjector / Forwarder / ResponseTransformer）
+│   ├── context.go             #   PipelineContext 上下文
+│   ├── pipeline.go            #   Pipeline 编排器
+│   └── forwarder.go           #   HTTPForwarder 默认转发器
+│
+├── adapter/                    # 【适配器层】可插拔的业务实现
+│   ├── interfaces.go          #   Adapter 接口定义
+│   ├── registry.go            #   适配器注册表
+│   ├── yunapi/                #   腾讯云 yunapi 适配器
+│   │   ├── adapter.go         #     组装 Pipeline 阶段
+│   │   ├── transformer.go     #     RequestTransformer + ResponseTransformer
+│   │   ├── auth.go            #     AuthInjector（Uin/SubAccountUin/AppId）
+│   │   └── config.go          #     YunAPIConfig 结构体
+│   ├── generic/               #   通用转发适配器
+│   │   └── adapter.go         #     URL 改写 + Header 注入
+│   └── template/              #   模板驱动适配器
+│       ├── adapter.go         #     配置化组装 Pipeline
+│       ├── field_mapper.go    #     配置驱动的字段映射
+│       └── response_wrapper.go #    配置驱动的响应包装
+│
+├── webui/                      # 【Web UI 包】管理面板
+│   ├── handler.go             #   REST API handler
+│   ├── events.go              #   SSE 实时日志推送
+│   └── static/                #   前端静态资源（embed 嵌入）
+│       ├── index.html
+│       ├── app.js
+│       └── style.css
+│
+├── debug/                      # 【诊断包】
+│   ├── collector.go           #   TraceCollector（实现 TraceRecorder）
+│   └── mcp.go                 #   MCP Server
+│
+└── docs/
+    ├── yunapi-proxy.md         # 项目说明文档
+    └── refactor-roadmap.md    # 本文档
+```
 
----
+### 3.11 Web UI REST API
 
-## 四、实施 Roadmap
+```
+# 规则脚本 CRUD
+GET    /api/rules                → 列表（含启用状态、统计信息）
+POST   /api/rules                → 创建（body: {name, content}）
+GET    /api/rules/:id            → 详情（含解析后的 Rules + 统计）
+PUT    /api/rules/:id            → 更新内容（body: {content}）
+DELETE /api/rules/:id            → 删除
 
-### Sprint 1：核心接口抽取 + Pipeline 引擎 + 目录拆分
+# 启停控制
+POST   /api/rules/:id/enable     → 启用
+POST   /api/rules/:id/disable    → 停用
+POST   /api/rules/:id/reload     → 重载
 
-> **目标**：将代理核心与业务逻辑解耦，引入 Pipeline 处理引擎抽象拆包/组包逻辑，现有功能完全不变，纯内部重构。
+# 批量操作
+POST   /api/rules/reorder        → 调整优先级（body: {ids: [...]})
+POST   /api/rules/reload-all     → 全部重载
 
-#### 任务列表
+# 校验（不保存，用于编辑器实时校验）
+POST   /api/rules/validate       → 校验规则内容
+                                    body: {content: "..."}
+                                    resp: {valid, errors: [{line, message}]}
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 1.1 | 创建 `proxy/interfaces.go` | 定义 `InterceptMatcher`、`RequestProcessor`、`TraceRecorder` 接口 |
-| 1.2 | 创建 `pipeline/interfaces.go` | 定义 Pipeline 各阶段接口：`RequestTransformer`、`AuthInjector`、`Forwarder`、`ResponseTransformer` |
-| 1.3 | 创建 `pipeline/context.go` | `PipelineContext` 上下文结构体（贯穿各阶段的数据载体） |
-| 1.4 | 创建 `pipeline/pipeline.go` | `Pipeline` 编排器（实现 `RequestProcessor`，按阶段链式执行） |
-| 1.5 | 创建 `pipeline/forwarder.go` | `HTTPForwarder` 默认转发器实现（HTTP POST JSON，连接池复用） |
-| 1.6 | 创建 `adapter/interfaces.go` | 定义 `Adapter` 接口 + `Route` 结构体 |
-| 1.7 | 拆分 `proxy.go` → `proxy/proxy.go` + `proxy/mitm.go` + `proxy/tunnel.go` + `proxy/helpers.go` | 按职责拆分，MITM/隧道/工具函数各自独立 |
-| 1.8 | 迁移 `cert.go` → `proxy/cert.go` | 直接移动，无逻辑改动 |
-| 1.9 | 迁移 `connmgr.go` → `proxy/connmgr.go` | 直接移动，无逻辑改动 |
-| 1.10 | 创建 `proxy/config.go` | 抽取代理层通用配置结构体 `ProxyConfig` |
-| 1.11 | 改造 `ForwardProxy` | 持有 `InterceptMatcher` 和 `map[string]RequestProcessor` 替代硬编码的 `handler` 和 `classifyRequest` |
-| 1.12 | 创建 `adapter/yunapi/` | 将 `handler.go` 拆分迁移：`transformer.go`（实现 `RequestTransformer` + `ResponseTransformer`）、`auth.go`（实现 `AuthInjector`）、`adapter.go`（组装 Pipeline） |
-| 1.13 | 创建 `adapter/registry.go` | 适配器注册表（`Register` / `Get`） |
-| 1.14 | 迁移 `debug.go` → `debug/collector.go` + `debug/dashboard.go` | 拆分诊断收集器和 HTML 面板 |
-| 1.15 | 迁移 `mcp.go` → `debug/mcp.go` | 移动到 debug 包 |
-| 1.16 | 改造 `main.go` | 依赖注入组装：加载配置 → 创建适配器（组装 Pipeline）→ 注入到代理核心 → 启动 |
-| 1.17 | 编译通过 + 功能回归验证 | 启动代理，通过浏览器访问 APM 控制台，验证拦截/转发/诊断全部正常 |
+# 运行时状态
+GET    /api/status               → MITM 域名集、hosts 映射数、活跃连接
 
-#### 预期结果
+# 实时日志（SSE 推送）
+GET    /api/events               → Server-Sent Events 实时匹配日志
+```
 
-- 目录结构从扁平单包 → 分层多包（`proxy/`、`pipeline/`、`adapter/yunapi/`、`debug/`）
-- `proxy/` 包只依赖 `RequestProcessor` 接口，不知道 Pipeline 内部结构
-- `pipeline/` 包定义阶段接口 + 编排器，不依赖任何具体适配器
-- `adapter/yunapi/` 通过组装 Pipeline 阶段实现 `RequestProcessor`
-- handler.go 中的拆包逻辑迁移到 `adapter/yunapi/transformer.go`，组包逻辑同上
-- 所有现有功能保持不变
+### 3.12 与 Whistle 的功能对比
 
-#### 验收标准
-
-| # | 验收项 | 验证方式 |
-|---|--------|---------|
-| ✅ | 编译通过，无 lint error | `go build ./...` 无错误 |
-| ✅ | `proxy/` 包不依赖 `adapter/` 和 `pipeline/` 包 | `go list -deps ./proxy/` 中不含 adapter、pipeline |
-| ✅ | `pipeline/` 包不依赖 `adapter/` 包 | `go list -deps ./pipeline/` 中不含 adapter |
-| ✅ | APM 控制台页面正常加载 | 浏览器通过代理访问 `console.cloud.tencent.com`，APM 页面数据正常 |
-| ✅ | yunapi 拦截请求正常 | debug 面板 `/debug/status` 显示 INTERCEPT 请求记录 |
-| ✅ | 直连 API 拦截请求正常 | `/_api/apm/DescribeSpanTreeByID` 经过拆包 → 转发 → 组包，数据正确 |
-| ✅ | 非拦截请求正常透传 | debug 面板显示 FWD 请求记录 |
-| ✅ | TCP 隧道正常 | CDN 资源（platform.js 等）正常加载 |
-| ✅ | 并发处理仍然生效 | 多个 API 请求并行处理，页面加载时间与重构前一致 |
-| ✅ | 诊断面板正常 | `/debug` HTML 页面可访问，`/debug/status` JSON 返回正常 |
-| ✅ | Pipeline 阶段可跳过 | 创建不带 ResponseTransformer 的 Pipeline，后端响应原样返回 |
-
----
-
-### Sprint 2：声明式拦截规则引擎 + Pipeline 配置化 + 通用适配器
-
-> **目标**：拦截规则从硬编码变为配置驱动，Pipeline 各阶段支持通过配置声明式组装，新增 generic 和 template 适配器验证扩展性。
-
-#### 任务列表
-
-| # | 任务 | 说明 |
-|---|------|------|
-| 2.1 | 创建 `intercept/rule.go` | `Rule` 结构体：`Name`、`MatchConfig`（method/path/path_prefix/query/header）、`AdapterName`、`Options`（如 cors） |
-| 2.2 | 创建 `intercept/engine.go` | `RuleEngine` 实现 `InterceptMatcher`，从配置加载规则列表 |
-| 2.3 | 实现 `MatchConfig` 匹配逻辑 | 支持精确匹配（path）、前缀匹配（path_prefix）、Query 参数匹配、Header 匹配 |
-| 2.4 | 改造配置文件格式 | 新增 `intercept_rules` 和 `adapters` 配置段，向后兼容旧配置 |
-| 2.5 | 创建 `adapter/generic/adapter.go` | 通用转发适配器：URL 改写 + Header 注入 + 无 Pipeline 直接透传 |
-| 2.6 | 创建 `adapter/template/` | 模板驱动适配器：从配置声明式组装 Pipeline 各阶段 |
-| 2.7 | 创建 `adapter/template/field_mapper.go` | 通用 `RequestTransformer`：配置驱动的字段映射 + 嵌套字段提取 + 保护字段检查 |
-| 2.8 | 创建 `adapter/template/response_wrapper.go` | 通用 `ResponseTransformer`：配置驱动的响应包装模板 + 错误码提取 |
-| 2.9 | Pipeline 配置解析 | 从 `adapters.xxx.pipeline` 配置段解析 `request_transform` / `auth` / `region` / `response_transform`，自动组装 Pipeline |
-| 2.10 | 改造 `main.go` 配置加载 | 解析 `intercept_rules` → 创建 `RuleEngine`；解析 `adapters` → 根据 `type` 创建对应适配器 → 注册到 registry |
-| 2.11 | 新增集成测试 | 用 generic 和 template 适配器各配置一个拦截规则，验证扩展性 |
-
-#### 预期结果
-
-- 拦截规则完全通过 `config.yaml` 配置，零代码改动即可新增拦截场景
-- generic 适配器可用于简单的 URL 改写/Header 注入场景
-- template 适配器可通过配置文件声明式定义拆包/组包规则，无需写 Go 代码
-- yunapi 适配器可逐步迁移为 template 适配器（验证配置化方案的完整性）
-- 向后兼容：现有 yunapi 配置继续正常工作
-
-#### 验收标准
-
-| # | 验收项 | 验证方式 |
-|---|--------|---------|
-| ✅ | yunapi 适配器通过新配置格式正常工作 | APM 控制台功能回归（yunapi + 直连 API 两种格式） |
-| ✅ | 新增拦截规则不需要改 Go 代码 | 在 config.yaml 中添加 generic 规则，重启代理即生效 |
-| ✅ | generic 适配器可正常转发 | 配置一个 generic 规则拦截某个 path → 转发到本地 mock server |
-| ✅ | template 适配器可声明式定义 Pipeline | 纯配置创建一个含拆包+组包的 template 适配器，转发到 mock server 验证 |
-| ✅ | Pipeline 字段映射正确 | template 适配器的 `field_mapping` 配置生效，后端收到正确的字段名 |
-| ✅ | Pipeline 嵌套字段提取正确 | `flatten_fields` 配置生效，嵌套 map 正确扁平化到顶层 |
-| ✅ | Pipeline 响应包装正确 | `wrapper_template` 配置生效，客户端收到正确的嵌套格式 |
-| ✅ | 规则不匹配时正常透传 | 未匹配的请求仍透传到上游 |
-| ✅ | 多条规则按顺序匹配 | 配置多条规则，验证第一条匹配即停止 |
-| ✅ | CORS 预检自动处理 | 配置 `options.cors: true` 的规则，OPTIONS 请求自动返回 204 |
-| ✅ | 配置校验 | 启动时对无效配置（缺少必填项、适配器不存在、Pipeline 配置错误等）报清晰错误并退出 |
-
----
-
-### Sprint 3：诊断层解耦 + 开源准备
-
-> **目标**：诊断层不依赖业务域名，完善文档和 README，达到开源可发布状态。
-
-#### 任务列表
-
-| # | 任务 | 说明 |
-|---|------|------|
-| 3.1 | 改造 `debug/collector.go` | `RecordForward` / `RecordIntercept` 的 Host 从请求上下文获取，不硬编码 |
-| 3.2 | 改造 `debug/dashboard.go` | HTML 标题/描述从配置读取，不硬编码 `yunapi-proxy` |
-| 3.3 | 改造 `debug/mcp.go` | MCP 工具描述通用化；`proxy_curl` 工具的默认参数从适配器获取 |
-| 3.4 | 添加 `adapter/generic/` 的 MCP 扩展 | 通用适配器的 curl 测试工具 |
-| 3.5 | 编写 README.md | 面向开源的完整 README：功能介绍、快速开始、配置参考、适配器开发指南 |
-| 3.6 | 添加 LICENSE | 选择开源协议（如 MIT / Apache 2.0） |
-| 3.7 | 添加 `.goreleaser.yaml` | 自动构建多平台二进制 |
-| 3.8 | 添加 `examples/` 目录 | 提供示例配置：yunapi 场景、generic 场景、多规则组合场景 |
-| 3.9 | 添加 Makefile | `make build` / `make test` / `make release` |
-| 3.10 | 代码审计 | 检查并清理所有硬编码的域名、账号、内网 IP 等敏感信息 |
-
-#### 预期结果
-
-- 诊断面板和 MCP Server 完全通用化，不含任何业务域名
-- README 完整，新用户 5 分钟内可运行起来
-- 代码中无敏感信息泄漏，可安全开源
-
-#### 验收标准
-
-| # | 验收项 | 验证方式 |
-|---|--------|---------|
-| ✅ | `debug/` 包不包含任何硬编码域名 | `grep -r "cloud.tencent.com" debug/` 无结果 |
-| ✅ | `proxy/` 包不包含任何业务域名 | `grep -r "cloud.tencent.com" proxy/` 无结果 |
-| ✅ | README 包含快速开始指南 | 按 README 步骤从零配置并运行成功 |
-| ✅ | 示例配置可运行 | `examples/` 下每个配置文件都能正常启动代理 |
-| ✅ | 无敏感信息泄漏 | `grep -rE "(uin|appid|1500000|700001|9\.223)" .` 只出现在 examples 中 |
-| ✅ | 跨平台编译 | `GOOS=linux GOARCH=amd64 go build` 和 `GOOS=darwin GOARCH=arm64 go build` 均成功 |
-| ✅ | 所有功能正常 | yunapi + generic 双适配器场景端到端验证通过 |
+| 功能 | Whistle | yunapi-proxy（本方案） |
+|------|---------|----------------------|
+| Hosts 映射 | ✅ | ✅ 完全兼容语法 |
+| 正则 URL 代理 | ✅ | ✅ 兼容 + 扩展（`@stream` `@cors`） |
+| 多规则文件 | ✅ Rules 面板 | ✅ 多脚本隔离 + 优先级 |
+| 启停控制 | ✅ 勾选框 | ✅ Web UI + REST API |
+| 实时日志 | ✅ Network 面板 | ✅ SSE 推送 + 过滤 |
+| 规则编辑器 | ✅ 内置 | ✅ 语法高亮 + 实时校验 |
+| Pipeline 拆包/组包 | ❌ | ✅ `pipeline://` 扩展语法 |
+| MITM 域名管理 | 手动配置 | ✅ `@intercept` 自动合并 |
+| 优先级控制 | 文件顺序 | ✅ `@priority` 显式声明 |
+| 热加载 | ✅ 保存即生效 | ✅ 文件监听 + API 触发 |
+| 匹配统计 | ❌ | ✅ 每条规则命中计数 |
+| 规则校验 | 基础 | ✅ 语法 + 正则 + 适配器引用检查 |
 
 ---
 
-## 五、风险评估
+## 四、核心交互流程
 
-| 风险 | 影响 | 缓解措施 |
-|------|------|---------|
-| Sprint 1 重构引入回归 bug | 现有功能不可用 | 每步改动后编译 + 端到端验证；可随时 git revert |
-| Pipeline 阶段接口粒度不合适 | 某些场景需要跨阶段共享状态 | `PipelineContext.Metadata` 提供通用 KV 存储；阶段接口保持最小，必要时扩展 |
-| 配置驱动的 Pipeline 表达力不足 | 复杂场景仍需写 Go 代码 | template 适配器覆盖 80% 场景；特殊场景回退为自定义适配器 |
-| 配置格式变更导致不兼容 | 用户需更新配置 | Sprint 2 保持向后兼容，旧配置格式自动转换 |
-| 适配器接口设计不够通用 | 后续扩展困难 | Sprint 1 先用 yunapi 验证 Pipeline 各阶段；Sprint 2 用 generic + template 两个额外场景验证 |
-| 开源后敏感信息泄漏 | 安全风险 | Sprint 3 专门做代码审计，CI 中加 secret scanning |
-
----
-
-## 六、改动量预估
-
-| Sprint | 新增代码 | 迁移/重构代码 | 删除代码 | 总工作量 |
-|--------|---------|-------------|---------|---------|
-| Sprint 1 | ~400 行（接口定义 + Pipeline 引擎 + 注册表 + main 组装） | ~600 行（拆分迁移 handler.go → adapter/yunapi/） | ~50 行（死代码） | 较大 |
-| Sprint 2 | ~500 行（规则引擎 + generic 适配器 + template 适配器 + Pipeline 配置解析） | ~100 行（main + config 改造） | ~20 行 | 较大 |
-| Sprint 3 | ~200 行（README + examples + Makefile） | ~100 行（诊断层改造） | ~30 行（硬编码清理） | 较小 |
-
----
-
-## 七、核心交互流程（重构后）
-
-### 7.1 代理层请求分发
+### 4.1 代理层请求分发（重构后）
 
 ```
 请求到达 proxy:8081
@@ -755,8 +859,8 @@ ForwardProxy.ServeHTTP()
     │
     ├─ CONNECT → handleConnect()
     │       │
-    │       ├─ interceptDomains 列表匹配？
-    │       │       │
+    │       ├─ engine.ShouldIntercept(hostname)?  ← InterceptMatcher 接口
+    │       │       │                               （合并所有启用脚本的 @intercept）
     │       │  YES  ▼
     │       │  handleMITM()
     │       │       │
@@ -764,17 +868,17 @@ ForwardProxy.ServeHTTP()
     │       │       │
     │       │  go func(seq, req) {
     │       │       │
-    │       │       ├─ ruleName := interceptMatcher.Match(req)  ← InterceptMatcher 接口
+    │       │       ├─ result, matched := engine.Match(req)  ← RequestMatcher 接口
     │       │       │
-    │       │       ├─ ruleName != "" ?
+    │       │       ├─ matched?
     │       │       │       │
     │       │       │  YES  ▼
-    │       │       │  processor := processorMap[ruleName]
-    │       │       │  resp := processor.Process(req, body)     ← RequestProcessor 接口
-    │       │       │  traceRecorder.RecordIntercept(...)        ← TraceRecorder 接口
+    │       │       │  processor := processors[result.RuleType]
+    │       │       │  resp := processor.Process(req, body, result)  ← RequestProcessor
+    │       │       │  traceRecorder.RecordIntercept(...)
     │       │       │
     │       │       │  NO   ▼
-    │       │       │  resp := processForward(req, hostname)    ← 通用透传（核心层内置）
+    │       │       │  resp := processForward(req, hostname)  ← 通用透传
     │       │       │  traceRecorder.RecordForward(...)
     │       │       │
     │       │       └─ respChan <- pendingResponse{seq, resp}
@@ -785,84 +889,311 @@ ForwardProxy.ServeHTTP()
     │       │  NO
     │       │  ▼
     │       └─ handleTunnel() — TCP 直接透传
+    │               │
+    │               └─ 上游地址 = engine.ResolveUpstream(hostname)  ← UpstreamResolver
     │
     └─ 非 CONNECT → handleHTTP() — HTTP 代理转发
 ```
 
-### 7.2 Pipeline 内部执行流程
+### 4.2 规则匹配流程
 
 ```
-processor.Process(req, body)
+engine.Match(req) — 请求: GET https://cloudcache.tencent-cloud.com/qcloud/tea/app/tapmOverview.zh.a1b2c3.js
     │
     ▼
-Pipeline.Process()
+for script in sorted_by_priority(enabled_scripts):   // 按 @priority 降序
+    │
+    ├─ [P:100] "APM 本地开发"
+    │   for rule in script.rules:
+    │       │
+    │       ├─ hosts 规则 → 跳过（hosts 不参与 Match，由 ResolveUpstream 使用）
+    │       ├─ pipeline://yunapi 规则 → 正则不匹配
+    │       ├─ /tapm[\w-]*...(js|css)/ → ✅ MATCH!
+    │       │     captures: [$1=tapmOverview, $2=.zh, $5=js, $6=""]
+    │       │     target:   "http://127.0.0.1:8322/$1.$5$6"
+    │       │     → 替换: "http://127.0.0.1:8322/tapmOverview.js"
+    │       │
+    │       └─ 返回 MatchResult{
+    │               RuleType: RuleTypeProxy,
+    │               Target:   "http://127.0.0.1:8322/tapmOverview.js",
+    │               Stream:   false,
+    │          }
+    │
+    ▼
+分发到 ProxyProcessor → 反向代理到 http://127.0.0.1:8322/tapmOverview.js
+    │
+    ▼
+返回本地 webpack-dev-server 构建的 JS 文件 ✅
+```
+
+### 4.3 Pipeline 内部执行流程
+
+```
+PipelineProcessor.Process(req, body, match)
+    │
+    ├─ 获取适配器: adapters[match.Adapter]  // "yunapi"
+    │
+    ▼
+Pipeline.Execute(req, body)
     │
     ├─ 1. 解析请求体 → ctx.ParsedRequest
     │
     ├─ 2. 拆包（RequestTransformers 链式执行）
-    │       │
-    │       ├─ yunapi transformer:
-    │       │     cmd → Action
-    │       │     serviceType → ApiModule
-    │       │     data.* → 扁平化到顶层（检查 protectedFields）
-    │       │
-    │       ├─ region transformer:
-    │       │     regionId(数字) → Region(字符串)
-    │       │
-    │       └─ template field_mapper（配置驱动）:
-    │             按 field_mapping 配置做字段重命名
-    │             按 flatten_fields 配置做嵌套提取
-    │
+    │       ├─ yunapi transformer: cmd→Action, serviceType→ApiModule, data.*→扁平化
+    │       └─ region transformer: regionId(数字)→Region(字符串)
     │       → ctx.BackendRequest
     │
     ├─ 3. 认证注入（AuthInjectors 链式执行）
-    │       │
-    │       ├─ yunapi auth:
-    │       │     ownerUin → Uin, uin → SubAccountUin
-    │       │     fallback → mock_auth 配置
-    │       │     注入 AppId
-    │       │
-    │       └─ template auth（配置驱动）:
-    │             按 field_source 映射 + inject_fields 默认值
-    │
-    │       → ctx.BackendRequest（已注入认证字段）
+    │       └─ yunapi auth: ownerUin→Uin, uin→SubAccountUin, 注入 AppId
+    │       → ctx.BackendRequest（含认证字段）
     │
     ├─ 4. 转发（Forwarder）
-    │       │
-    │       └─ HTTPForwarder:
-    │             POST ctx.BackendRequest → ctx.BackendURL
-    │             → ctx.BackendResp
+    │       └─ HTTPForwarder: POST ctx.BackendRequest → backend_url
+    │       → ctx.BackendResp
     │
     └─ 5. 组包（ResponseTransformers 链式执行）
-            │
-            ├─ yunapi response transformer:
-            │     提取 Response.Error.Code → error_code
-            │     包装为三层嵌套：
-            │     {code:0, data:{code:error_code, cgwerrorCode:0,
-            │      data:{Response:...}}, mccode:0, ...}
-            │
-            ├─ template response_wrapper（配置驱动）:
-            │     按 wrapper_template 配置包装
-            │     按 error_code_path 配置提取错误码
-            │
-            └─ generic（无 ResponseTransformer）:
-                  ctx.FinalResp = ctx.BackendResp（原样返回）
+            └─ yunapi response: 包装为 {code:0, data:{code, data:{Response}}}
+            → ctx.FinalResp → 构建 HTTP Response 返回
 ```
 
 ---
 
-## 八、后续演进方向（超出当前 Roadmap）
+## 五、实施 Roadmap
 
-以下功能不在当前 3 个 Sprint 范围内，作为开源后的长期演进方向：
+### Sprint 1：代理核心层抽取 + Pipeline 引擎 + 基础规则解析
+
+> **目标**：将代理核心与业务逻辑解耦，引入 Pipeline 处理引擎，创建规则引擎基础结构。现有功能完全不变，纯内部重构。
+
+#### 任务列表
+
+| # | 任务 | 说明 |
+|---|------|------|
+| 1.1 | 创建 `proxy/interfaces.go` | 定义 `InterceptMatcher`、`UpstreamResolver`、`RequestMatcher`、`RequestProcessor`、`TraceRecorder` 接口 |
+| 1.2 | 创建 `pipeline/interfaces.go` | 定义 `RequestTransformer`、`AuthInjector`、`Forwarder`、`ResponseTransformer` |
+| 1.3 | 创建 `pipeline/context.go` | `PipelineContext` 上下文结构体 |
+| 1.4 | 创建 `pipeline/pipeline.go` | Pipeline 编排器（实现按阶段链式执行） |
+| 1.5 | 创建 `pipeline/forwarder.go` | `HTTPForwarder` 默认转发器 |
+| 1.6 | 创建 `rule/types.go` | `Rule`、`RuleType`、`MatchResult` 类型定义 |
+| 1.7 | 创建 `rule/script.go` | `RuleScript`、`ScriptStats` 结构体 |
+| 1.8 | 创建 `rule/parser.go` | 规则文件解析器（支持 hosts / 正则 / pipeline:// / @指令） |
+| 1.9 | 创建 `rule/engine.go` | `RuleEngine` 基础实现（`ShouldIntercept` + `ResolveUpstream` + `Match`） |
+| 1.10 | 拆分 `proxy.go` → `proxy/` 包 | `proxy.go` + `mitm.go` + `tunnel.go` + `helpers.go` + `config.go` |
+| 1.11 | 迁移 `cert.go` → `proxy/cert.go` | 直接移动 |
+| 1.12 | 迁移 `connmgr.go` → `proxy/connmgr.go` | 直接移动 |
+| 1.13 | 改造 `ForwardProxy` | 持有 `InterceptMatcher`、`UpstreamResolver`、`RequestMatcher` 接口，替代硬编码 |
+| 1.14 | 创建 `adapter/interfaces.go` + `adapter/registry.go` | 适配器接口 + 注册表 |
+| 1.15 | 创建 `adapter/yunapi/` | 迁移 `handler.go` → `transformer.go` + `auth.go` + `adapter.go` |
+| 1.16 | 创建 `processor/` 包 | `ProxyProcessor` + `PipelineProcessor` + `StreamProcessor` + registry |
+| 1.17 | 创建 `rules/apm-dev.rules` | 将当前硬编码规则迁移为规则脚本文件 |
+| 1.18 | 改造 `main.go` | 加载配置 → 解析规则 → 创建 Engine → 创建 Processors → 注入到 Proxy → 启动 |
+| 1.19 | 迁移 `debug.go` → `debug/collector.go` | 实现 TraceRecorder 接口 |
+| 1.20 | 编译通过 + 功能回归验证 | 启动代理，APM 控制台功能完全正常 |
+
+#### 预期结果
+
+- 目录结构从扁平单包 → 分层多包
+- `proxy/` 只依赖接口，不知道规则如何存储和匹配
+- `rule/` 负责解析和匹配，不知道具体如何处理
+- `processor/` 负责执行，不知道规则如何管理
+- `pipeline/` 定义阶段接口和编排器，不依赖具体适配器
+- hosts.txt 功能迁移为规则脚本（`rules/apm-dev.rules` 中的 hosts 行）
+- 所有现有功能保持不变
+
+#### 验收标准
+
+| # | 验收项 | 验证方式 |
+|---|--------|---------|
+| ✅ | 编译通过，无 lint error | `go build ./...` |
+| ✅ | `proxy/` 不依赖 `rule/`、`processor/`、`adapter/`、`pipeline/` | `go list -deps ./proxy/` |
+| ✅ | `pipeline/` 不依赖 `adapter/` | `go list -deps ./pipeline/` |
+| ✅ | `rule/` 不依赖 `processor/`、`proxy/` | `go list -deps ./rule/` |
+| ✅ | APM 控制台页面正常加载 | 浏览器通过代理访问 |
+| ✅ | yunapi 拦截正常 | debug 面板显示 INTERCEPT 记录 |
+| ✅ | 直连 API 拦截正常 | `/_api/apm/` 请求正常 |
+| ✅ | 非拦截请求正常透传 | FWD 记录正常 |
+| ✅ | TCP 隧道正常 | CDN 资源正常加载 |
+| ✅ | 并发处理正常 | 页面加载时间与重构前一致 |
+
+---
+
+### Sprint 2：规则管理 + 热加载 + 静态资源代理
+
+> **目标**：完善规则管理能力（CRUD + 启停 + 热加载），实现静态资源代理（前端 HMR），支持多脚本隔离。
+
+#### 任务列表
+
+| # | 任务 | 说明 |
+|---|------|------|
+| 2.1 | 创建 `rule/manager.go` | RuleManager 完整实现（CRUD + 启停 + 持久化） |
+| 2.2 | 实现文件监听热加载 | fsnotify 监听 `rules/` 目录变化，自动 reload |
+| 2.3 | 创建 `rule/validator.go` | 规则校验（语法 + 正则合法性 + 适配器引用检查） |
+| 2.4 | 完善 `ProxyProcessor` | 支持正则捕获组替换、Header 复制、超时控制 |
+| 2.5 | 完善 `StreamProcessor` | SSE 流式代理（不读完 body，管道式传输） |
+| 2.6 | 实现 `@stream` 选项 | Match 结果含 Stream 标记 → 分发到 StreamProcessor |
+| 2.7 | 实现 `@cors` 选项 | OPTIONS 预检自动返回 204，实际请求附加 CORS 头 |
+| 2.8 | `cloudcache.tencent-cloud.com` MITM 支持 | 通过 `@intercept` 声明，验证 CDN 域名 MITM |
+| 2.9 | 创建 `rules/cls-dev.rules` | 验证多脚本隔离（与 apm-dev 共存） |
+| 2.10 | 创建 `rules/test-env.rules` | 迁移现有 hosts.txt 中的测试环境映射 |
+| 2.11 | 创建 `adapter/generic/` | 通用适配器（URL 改写 + Header 注入 + 无 Pipeline） |
+| 2.12 | 创建 `adapter/template/` | 模板驱动适配器（配置化 Pipeline） |
+| 2.13 | 端到端验证 | APM 前端资源走本地 dev-server + HMR 热更新 + API 拦截 |
+
+#### 预期结果
+
+- 规则脚本支持创建/编辑/删除/启停，文件变化自动热加载
+- 静态资源（JS/CSS）从 CDN 重定向到本地 webpack-dev-server
+- HMR SSE 流式传输正常工作
+- 多脚本（APM + CLS + test-env）可共存，互不干扰
+- 彻底消除 `hosts.txt`，全部由规则脚本管理
+
+#### 验收标准
+
+| # | 验收项 | 验证方式 |
+|---|--------|---------|
+| ✅ | 静态资源代理生效 | `tapmOverview.js` 从本地 dev-server 获取 |
+| ✅ | HMR 热更新正常 | 修改代码 → 浏览器自动刷新 |
+| ✅ | 多脚本隔离 | 禁用 CLS 脚本不影响 APM 脚本 |
+| ✅ | 热加载生效 | 修改 .rules 文件 → 2s 内规则自动更新 |
+| ✅ | 脚本启停不重启 | API 调用 disable/enable → 立即生效 |
+| ✅ | 正则不匹配时透传 | CDN 上非 tapm 资源正常通过 MITM 透传 |
+| ✅ | hosts.txt 已删除 | 全部由 rules/ 目录管理 |
+| ✅ | generic 适配器可用 | 配置验证通过 |
+| ✅ | template 适配器可用 | 配置验证通过 |
+
+---
+
+### Sprint 3：Web UI 管理面板 + 实时日志
+
+> **目标**：提供可视化管理面板，支持规则编辑、启停、实时匹配日志，达到类似 Whistle 的使用体验。
+
+#### 任务列表
+
+| # | 任务 | 说明 |
+|---|------|------|
+| 3.1 | 创建 `webui/handler.go` | REST API handler（规则 CRUD + 启停 + 校验 + 状态） |
+| 3.2 | 创建 `webui/events.go` | SSE 实时日志推送（规则匹配事件） |
+| 3.3 | 创建 `webui/static/index.html` | 单页应用入口 |
+| 3.4 | 创建 `webui/static/app.js` | 规则列表（启停/优先级）+ 规则编辑器（语法高亮 + 实时校验）+ 日志面板 |
+| 3.5 | 创建 `webui/static/style.css` | 样式 |
+| 3.6 | 使用 `embed` 嵌入静态资源 | 打包为单一二进制 |
+| 3.7 | 改造 `debug/` 包 | 精简，部分功能迁入 webui（诊断面板 → Web UI） |
+| 3.8 | 实现规则编辑器语法高亮 | 支持 hosts / 正则 / @指令 的着色和自动补全 |
+| 3.9 | 实现实时日志过滤 | 按脚本名/规则类型/状态码过滤 |
+| 3.10 | 实现匹配统计展示 | 每条规则的命中次数、最后命中时间 |
+| 3.11 | 端到端验证 | Web UI 创建/编辑/启停规则 → 代理行为实时生效 |
+
+#### 预期结果
+
+- 浏览器访问 `http://localhost:8082/ui/` 可管理所有规则
+- 规则编辑器带语法高亮和实时校验
+- 实时日志 SSE 推送，支持过滤和暂停
+- 匹配统计可视化展示
+- 单一二进制，无需外部依赖
+
+#### 验收标准
+
+| # | 验收项 | 验证方式 |
+|---|--------|---------|
+| ✅ | Web UI 可访问 | `http://localhost:8082/ui/` 正常加载 |
+| ✅ | 规则列表展示 | 显示所有脚本 + 启用状态 + 命中统计 |
+| ✅ | 在线编辑规则 | 编辑 → 保存 → 2s 内生效 |
+| ✅ | 实时校验 | 输入错误语法时立即显示错误提示 |
+| ✅ | 启停控制 | 点击开关 → 规则立即启停 |
+| ✅ | 实时日志 | SSE 推送匹配事件，不丢失 |
+| ✅ | 日志过滤 | 按脚本/类型过滤正确 |
+| ✅ | 单一二进制 | `go build` 产出单文件，含所有静态资源 |
+
+---
+
+### Sprint 4：诊断层解耦 + 开源准备
+
+> **目标**：诊断层不依赖业务域名，完善文档，达到开源可发布状态。
+
+#### 任务列表
+
+| # | 任务 | 说明 |
+|---|------|------|
+| 4.1 | 改造 `debug/collector.go` | Host 从请求上下文获取，不硬编码 |
+| 4.2 | 改造 `debug/mcp.go` | MCP 工具描述通用化 |
+| 4.3 | 编写 README.md | 功能介绍、快速开始、配置参考、规则语法参考、适配器开发指南 |
+| 4.4 | 添加 LICENSE | MIT / Apache 2.0 |
+| 4.5 | 添加 `examples/` 目录 | 示例配置和规则脚本 |
+| 4.6 | 添加 Makefile | `make build` / `make test` / `make release` |
+| 4.7 | 添加 `.goreleaser.yaml` | 多平台二进制构建 |
+| 4.8 | 代码审计 | 清理硬编码域名、账号、内网 IP 等敏感信息 |
+| 4.9 | 性能测试 | 规则匹配性能基准测试（100 条规则 < 1ms） |
+| 4.10 | 集成测试 | 完整的端到端测试用例 |
+
+#### 验收标准
+
+| # | 验收项 | 验证方式 |
+|---|--------|---------|
+| ✅ | `proxy/` 无业务域名 | `grep -r "cloud.tencent.com" proxy/` 无结果 |
+| ✅ | `rule/` 无业务域名 | `grep -r "cloud.tencent.com" rule/` 无结果 |
+| ✅ | README 完整 | 新用户 5 分钟内可运行 |
+| ✅ | 示例可运行 | `examples/` 下配置均可正常启动 |
+| ✅ | 无敏感信息 | `grep -rE "(uin|appid|1500000|700001|9\.223)" .` 只在 examples 中 |
+| ✅ | 跨平台编译 | linux/amd64 + darwin/arm64 编译成功 |
+| ✅ | 规则匹配性能 | 100 条规则匹配 < 1ms（benchmark） |
+
+---
+
+## 六、风险评估
+
+| 风险 | 影响 | 缓解措施 |
+|------|------|---------|
+| Sprint 1 重构引入回归 | 现有功能不可用 | 每步编译 + 端到端验证；可随时 git revert |
+| 规则语法设计不够通用 | 覆盖不了某些场景 | 保留 `pipeline://` 扩展口，复杂场景写自定义适配器 |
+| 正则性能（复杂正则回溯） | 匹配延迟高 | 正则编译时校验复杂度；匹配超时保护（10ms） |
+| 热加载竞态 | 规则不一致 | 写锁 + 原子替换；编译失败回滚到旧版本 |
+| SSE 流式传输阻塞 | 影响同连接其他请求 | 浏览器为 SSE 开独立连接（实测验证） |
+| Pipeline 阶段接口粒度 | 跨阶段共享状态困难 | `PipelineContext.Metadata` 通用 KV 存储 |
+| 配置格式变更 | 用户需更新配置 | Sprint 1 提供自动迁移脚本（旧 config → 新 config + rules） |
+| 开源后敏感信息泄漏 | 安全风险 | Sprint 4 专门代码审计 + CI secret scanning |
+
+---
+
+## 七、改动量预估
+
+| Sprint | 新增代码 | 迁移/重构代码 | 删除代码 | 核心产出 |
+|--------|---------|-------------|---------|---------|
+| Sprint 1 | ~800 行 | ~600 行 | ~50 行 | 分层架构 + 规则引擎基础 + Pipeline + yunapi 适配器 |
+| Sprint 2 | ~600 行 | ~100 行 | ~300 行（hosts.txt） | 规则管理 + 热加载 + 静态代理 + 流式传输 |
+| Sprint 3 | ~1000 行 | ~50 行 | ~30 行 | Web UI 管理面板 + 实时日志 |
+| Sprint 4 | ~300 行 | ~100 行 | ~50 行 | 文档 + 示例 + 开源准备 |
+
+---
+
+## 八、设计决策记录
+
+| # | 决策点 | 选择 | 理由 |
+|---|--------|------|------|
+| 1 | 规则存储格式 | 文本规则脚本（`.rules` 文件） | Whistle 兼容，人类可读，Git 友好，支持注释 |
+| 2 | 规则管理方式 | 文件系统 + Web UI + REST API | 开发者可用编辑器直接改文件，也可用 Web UI 在线管理 |
+| 3 | 静态代理 vs Pipeline | 独立 Processor | 不需要拆包/认证/组包，强行套 Pipeline 增加复杂度 |
+| 4 | 多脚本优先级 | `@priority` 显式声明 | 比文件名排序更直观，避免重命名影响行为 |
+| 5 | MITM 域名管理 | `@intercept` 指令 + 自动合并 | 规则和域名声明在一起，不需要两处配置 |
+| 6 | hosts 功能定位 | 规则脚本中的一种规则类型 | 统一管理，不需要单独的 hosts.txt 文件 |
+| 7 | 热加载机制 | fsnotify + 写锁 + 原子替换 | 无需重启，编译失败回滚保证稳定 |
+| 8 | Pipeline vs 规则引擎 | 并存，Pipeline 被规则引擎调度 | Pipeline 处理 API 拆包/组包（复杂），规则引擎负责匹配/分发（简单） |
+| 9 | Web UI 技术栈 | 原生 JS + embed 嵌入 | 零依赖，单一二进制，避免 Node.js 构建步骤 |
+| 10 | SSE 流式传输 | `@stream` 标记 + StreamProcessor | 显式标记避免误判；独立处理器隔离复杂度 |
+
+---
+
+## 九、后续演进方向（超出当前 Roadmap）
 
 | 方向 | 说明 |
 |------|------|
 | **HTTP/2 MITM** | 代理和浏览器之间也使用 HTTP/2，彻底消除协议降级 |
 | **WebSocket 拦截** | 支持 WebSocket 升级请求的拦截和转发 |
-| **Pipeline 中间件链** | 在 Pipeline 阶段之间插入通用中间件（日志、限流、熔断、重试） |
-| **Pipeline 条件分支** | 根据请求内容动态选择不同的 Pipeline 阶段组合（如按 Action 走不同转换规则） |
-| **gRPC Forwarder** | Pipeline 支持 gRPC 协议转发，不局限于 HTTP JSON |
-| **响应模板引擎** | `wrapper_template` 支持 Go template 语法，提供更灵活的响应包装能力 |
-| **Web UI 配置管理** | 通过 Web 界面管理拦截规则和 Pipeline 配置，无需重启 |
-| **插件系统** | 支持通过外部二进制/动态库加载适配器和 Pipeline 阶段 |
-| **录制/回放** | 请求录制 + Mock 回放，用于测试和 Demo |
+| **Pipeline 中间件链** | 日志、限流、熔断、重试等通用中间件 |
+| **Pipeline 条件分支** | 根据请求内容动态选择不同阶段组合 |
+| **gRPC Forwarder** | Pipeline 支持 gRPC 协议转发 |
+| **响应模板引擎** | Go template 语法的灵活响应包装 |
+| **插件系统** | 外部二进制/动态库加载适配器 |
+| **录制/回放** | 请求录制 + Mock 回放（测试和 Demo） |
+| **规则脚本模板市场** | 预置常见场景的规则脚本，一键导入 |
+| **规则组/继承** | `@import` 引用其他脚本，减少重复 |
+| **分布式配置** | 规则脚本远程存储 + 多实例同步 |
+| **性能面板** | 请求耗时分布、慢请求排行、连接池使用率 |
