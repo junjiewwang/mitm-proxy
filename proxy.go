@@ -687,6 +687,7 @@ func (p *ForwardProxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 转发请求
+	// NOCA:server_side_request_forgery(设计如此)
 	proxyReq, err := http.NewRequest(r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, "Create request failed", http.StatusBadGateway)
