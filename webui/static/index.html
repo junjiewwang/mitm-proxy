@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy Manager</title>
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>⚡ Proxy Manager</h1>
+      <span class="version">MITM Proxy Framework</span>
+    </div>
+    <div class="header-right">
+      <div class="status-indicators">
+        <span class="indicator" id="sseStatus" title="SSE Connection">
+          <span class="dot"></span>
+          <span class="label">Live</span>
+        </span>
+        <span class="indicator" title="Uptime">
+          <span class="label" id="uptimeValue">--</span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="rules">📋 Rules</button>
+    <button class="tab" data-tab="logs">📡 Live Logs</button>
+    <button class="tab" data-tab="status">📊 Status</button>
+  </nav>
+
+  <!-- ============ Rules Tab ============ -->
+  <section id="tab-rules" class="tab-content active">
+    <div class="toolbar">
+      <button class="btn btn-primary" id="btnNewRule">+ New Script</button>
+      <button class="btn" id="btnReloadAll">↻ Reload All</button>
+      <div class="toolbar-spacer"></div>
+      <span class="count" id="scriptCount">0 scripts</span>
+    </div>
+
+    <div class="split-view">
+      <!-- Left: Script List -->
+      <div class="panel script-list" id="scriptList">
+        <div class="empty-state" id="emptyScripts">
+          <p>No rule scripts found</p>
+          <p class="hint">Click "+ New Script" or add .rules files to rules/ directory</p>
+        </div>
+      </div>
+
+      <!-- Right: Editor -->
+      <div class="panel editor-panel" id="editorPanel">
+        <div class="editor-header">
+          <span class="editor-title" id="editorTitle">Select a script to edit</span>
+          <div class="editor-actions" id="editorActions" style="display:none">
+            <button class="btn btn-sm" id="btnValidate" title="Validate">✓ Validate</button>
+            <button class="btn btn-sm btn-primary" id="btnSave" title="Save (Ctrl+S)">💾 Save</button>
+          </div>
+        </div>
+        <div class="editor-body">
+          <div class="editor-placeholder" id="editorPlaceholder">
+            <p>← Select a script from the list</p>
+            <p class="hint">or create a new one</p>
+          </div>
+          <div class="editor-container" id="editorContainer" style="display:none">
+            <div class="line-numbers" id="lineNumbers"></div>
+            <textarea id="editorTextarea" spellcheck="false" wrap="off"></textarea>
+          </div>
+          <div class="validation-bar" id="validationBar" style="display:none"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Logs Tab ============ -->
+  <section id="tab-logs" class="tab-content">
+    <div class="toolbar">
+      <div class="filter-group">
+        <select id="logFilterType">
+          <option value="">All Types</option>
+          <option value="match">Match</option>
+          <option value="forward">Forward</option>
+          <option value="tunnel">Tunnel</option>
+          <option value="error">Error</option>
+        </select>
+        <select id="logFilterScript">
+          <option value="">All Scripts</option>
+        </select>
+        <input type="text" id="logFilterURL" placeholder="Filter by URL..." class="filter-input">
+      </div>
+      <div class="toolbar-spacer"></div>
+      <button class="btn btn-sm" id="btnTogglePause">⏸ Pause</button>
+      <button class="btn btn-sm" id="btnClearLogs">🗑 Clear</button>
+      <span class="count" id="logCount">0 events</span>
+    </div>
+    <div class="log-table-wrap">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th class="col-time">Time</th>
+            <th class="col-type">Type</th>
+            <th class="col-method">Method</th>
+            <th class="col-url">URL</th>
+            <th class="col-status">Status</th>
+            <th class="col-latency">Latency</th>
+            <th class="col-script">Script</th>
+            <th class="col-target">Target</th>
+          </tr>
+        </thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ Status Tab ============ -->
+  <section id="tab-status" class="tab-content">
+    <div class="status-grid">
+      <div class="stat-card">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value" id="statUptime">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Requests</div>
+        <div class="stat-value" id="statTotalReqs">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Errors</div>
+        <div class="stat-value stat-error" id="statTotalErrs">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">MITM Active</div>
+        <div class="stat-value" id="statMitmActive">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">MITM Evicted</div>
+        <div class="stat-value stat-warn" id="statMitmEvicted">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Rule Scripts</div>
+        <div class="stat-value" id="statScripts">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Rules</div>
+        <div class="stat-value" id="statRules">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total Hits</div>
+        <div class="stat-value stat-ok" id="statHits">--</div>
+      </div>
+    </div>
+
+    <h3 class="section-title">Top Paths</h3>
+    <div class="panel">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Path</th>
+            <th>Count</th>
+            <th>Avg ms</th>
+            <th>Max ms</th>
+            <th>Errors</th>
+          </tr>
+        </thead>
+        <tbody id="topPathsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ New Script Dialog ============ -->
+  <div class="modal-overlay" id="modalOverlay" style="display:none">
+    <div class="modal">
+      <h3>New Rule Script</h3>
+      <div class="form-group">
+        <label>Script Name</label>
+        <input type="text" id="newScriptName" placeholder="e.g. my-dev-rules" autofocus>
+      </div>
+      <div class="form-group">
+        <label>Initial Content (optional)</label>
+        <textarea id="newScriptContent" rows="8" placeholder='@name "My Rules"
+@priority 50
+
+# Add your rules here
+# @intercept example.com
+# /\/api\/(.*)/ http://localhost:3000/$1'></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="btnCancelNew">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmNew">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Toast Notifications ============ -->
+  <div class="toast-container" id="toastContainer"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
