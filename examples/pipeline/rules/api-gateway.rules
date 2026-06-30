@@ -1,0 +1,20 @@
+# =============================================
+# API 网关拦截规则（Pipeline 示例）
+# 演示如何用 pipeline:// 处理 API 格式转换
+# =============================================
+@name "API 网关联调"
+@priority 100
+
+# --- MITM 拦截域名 ---
+@intercept gateway.example.com
+
+# --- Hosts 映射 ---
+192.168.1.100 gateway.example.com
+
+# --- API 拦截（走 Pipeline 拆包/组包）---
+# 匹配 API 网关格式的请求，通过 yunapi 适配器转换后转发到本地后端
+/\/cgi\/api\?.*action=delegate/  pipeline://yunapi
+/\/_api\/myapp\//  pipeline://yunapi  @cors
+
+# --- 其他静态资源正常代理 ---
+/\/static\//  http://127.0.0.1:3000/static/

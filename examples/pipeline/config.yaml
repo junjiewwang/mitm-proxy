@@ -1,0 +1,39 @@
+# Pipeline 适配器示例配置
+# 用途：演示 Pipeline 拆包/组包能力，模拟 API 网关格式转换
+
+server:
+  listen: ":8082"
+
+backend:
+  url: "http://127.0.0.1:16686"
+  api_path: "/api/v1"
+  timeout: 30s
+
+proxy:
+  enable: true
+  listen: ":8081"
+  cert_dir: "certs"
+  intercept_domains: []
+
+rules:
+  dir: "rules"
+  hot_reload: true
+  watch_interval: 2s
+
+# Pipeline 适配器配置
+adapters:
+  yunapi:
+    type: "yunapi"
+    backend:
+      url: "http://127.0.0.1:16686"
+      api_path: "/api/v1"
+      timeout: 30s
+    auth:
+      uin: "100000001"
+      sub_account_uin: "100000002"
+      app_id: 12345678
+    region_map:
+      1: "us-east-1"
+      2: "us-west-2"
+      3: "eu-west-1"
+      4: "ap-southeast-1"

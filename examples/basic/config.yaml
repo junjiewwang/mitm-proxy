@@ -1,0 +1,21 @@
+# 基础示例配置
+# 用途：本地 API 开发联调，将前端请求代理到本地后端
+
+server:
+  listen: ":8082"
+
+backend:
+  url: "http://127.0.0.1:3000"
+  api_path: "/api"
+  timeout: 30s
+
+proxy:
+  enable: true
+  listen: ":8081"
+  cert_dir: "certs"
+  intercept_domains: []
+
+rules:
+  dir: "rules"
+  hot_reload: true
+  watch_interval: 2s

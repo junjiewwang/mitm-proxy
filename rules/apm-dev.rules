@@ -1,0 +1,24 @@
+# =============================================
+# APM 本地联调规则
+# 包含：hosts 映射 + API 拦截 + 前端资源代理
+# =============================================
+@name "APM 本地开发"
+@priority 100
+
+# --- MITM 拦截域名声明 ---
+@intercept console.cloud.tencent.com
+@intercept console-hc.cloud.tencent.com
+@intercept cloudcache.tencent-cloud.com
+
+# --- Hosts 映射 ---
+9.223.72.139 console.cloud.tencent.com console-hc.cloud.tencent.com
+139.199.214.200 cloudcache.tencent-cloud.com
+
+# --- API 拦截（走 Pipeline 拆包/组包）---
+/\/cgi\/capi\?.*action=delegate&.*serviceType=apm/  pipeline://yunapi
+/\/_api\/apm\//  pipeline://yunapi  @cors
+
+# --- 前端资源代理（CDN → 本地 webpack-dev-server）---
+/\/qcloud\/tea\/app\/(tapm[\w-]*)(\.(zh|en|jp|ko|dev))?(\.\w{10})?\.(js|css)(\.map)?$/  http://127.0.0.1:8322/$1.$5$6
+/\/qcloud\/tea\/app\/(.+\/)?__webpack_hmr$/  http://127.0.0.1:8322/__webpack_hmr  @stream
+/\/qcloud\/tea\/app\/(.+\.)?(\w+)\.(hot-update\.(js|json))$/  http://127.0.0.1:8322/$1$2.$3
