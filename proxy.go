@@ -18,24 +18,56 @@ import (
 // ForwardProxy 正向代理服务，支持 CONNECT 隧道和 MITM 拦截
 type ForwardProxy struct {
 	cfg          *Config
-	handler      *handler
 	caCert       *CACert
 	connMgr      *ConnManager // MITM 连接管理器（有界 + LRU 淘汰）
 	httpClient   *http.Client // 普通 HTTP 代理转发
 	pooledClient *http.Client // MITM 透传（连接池复用 TLS）
+
+	// 通用架构接口（通过依赖注入）
+	interceptMatcher InterceptMatcher  // 域名是否需要 MITM
+	upstreamResolver UpstreamResolver  // hosts 映射解析
+	requestMatcher   RequestMatcher    // 请求规则匹配
+	requestProcessor RequestProcessor  // 匹配后的请求处理器
+}
+
+// ProxyOption ForwardProxy 的可选配置
+type ProxyOption func(*ForwardProxy)
+
+// WithInterceptMatcher 注入域名拦截判断器
+func WithInterceptMatcher(m InterceptMatcher) ProxyOption {
+	return func(p *ForwardProxy) { p.interceptMatcher = m }
+}
+
+// WithUpstreamResolver 注入上游解析器
+func WithUpstreamResolver(r UpstreamResolver) ProxyOption {
+	return func(p *ForwardProxy) { p.upstreamResolver = r }
+}
+
+// WithRequestMatcher 注入请求匹配器
+func WithRequestMatcher(m RequestMatcher) ProxyOption {
+	return func(p *ForwardProxy) { p.requestMatcher = m }
+}
+
+// WithRequestProcessor 注入请求处理器
+func WithRequestProcessor(proc RequestProcessor) ProxyOption {
+	return func(p *ForwardProxy) { p.requestProcessor = proc }
 }
 
 // NewForwardProxy 创建正向代理实例
-func NewForwardProxy(cfg *Config, h *handler) (*ForwardProxy, error) {
+func NewForwardProxy(cfg *Config, opts ...ProxyOption) (*ForwardProxy, error) {
 	ca, err := LoadOrGenerateCA(cfg.Proxy.CertDir)
 	if err != nil {
 		return nil, fmt.Errorf("load/generate CA: %w", err)
 	}
 
 	p := &ForwardProxy{
-		cfg:     cfg,
-		handler: h,
-		caCert:  ca,
+		cfg:    cfg,
+		caCert: ca,
+	}
+
+	// 应用可选配置
+	for _, opt := range opts {
+		opt(p)
 	}
 
 	// 普通 HTTP 客户端
@@ -129,6 +161,11 @@ func (p *ForwardProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 // shouldIntercept 判断是否需要 MITM 拦截
 func (p *ForwardProxy) shouldIntercept(hostname string) bool {
+	// 优先使用注入的规则引擎接口
+	if p.interceptMatcher != nil {
+		return p.interceptMatcher.ShouldIntercept(hostname)
+	}
+	// 兼容：回退到配置中的域名列表
 	for _, domain := range p.cfg.Proxy.InterceptDomains {
 		if hostname == domain || strings.HasSuffix(hostname, "."+domain) {
 			return true
@@ -364,16 +401,20 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 			defer workerWg.Done()
 
 			var resp *http.Response
-			switch p.classifyRequest(req) {
-			case interceptYunAPI:
-				log.Printf("[Proxy] *** INTERCEPTED [seq=%d]: %s %s", seq, req.Method, req.URL.String())
-				resp = p.processIntercept(req)
-			case interceptDirectAPI:
-				log.Printf("[Proxy] *** DIRECT-API [seq=%d]: %s %s", seq, req.Method, req.URL.String())
-				resp = p.processDirectAPI(req)
-			default:
-				resp = p.processForward(req, hostname)
+
+			// 使用规则引擎匹配
+			if p.requestMatcher != nil && p.requestProcessor != nil {
+				if result, matched := p.requestMatcher.Match(req); matched {
+					log.Printf("[Proxy] *** MATCHED [seq=%d]: %s %s → %s (script=%s)",
+						seq, req.Method, req.URL.String(), result.Target, result.ScriptName)
+					resp = p.requestProcessor.Process(req, bodyBytes, result)
+					respChan <- pendingResponse{seq: seq, resp: resp}
+					return
+				}
 			}
+
+			// 未匹配：透传到上游
+			resp = p.processForward(req, hostname)
 
 			respChan <- pendingResponse{seq: seq, resp: resp}
 		}(seq, req)
@@ -387,122 +428,7 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 	writerWg.Wait()
 }
 
-// interceptType 拦截类型
-type interceptType int
 
-const (
-	interceptNone      interceptType = iota // 不拦截（透传到上游）
-	interceptYunAPI                         // yunapi 格式：POST /cgi/capi?action=delegate&serviceType=apm
-	interceptDirectAPI                      // 直连 API 格式：/_api/apm/{Action}
-)
-
-// classifyRequest 判断请求的拦截类型
-func (p *ForwardProxy) classifyRequest(r *http.Request) interceptType {
-	// 规则 1：yunapi 格式 — POST /cgi/capi?action=delegate&serviceType=apm
-	if r.Method == http.MethodPost && r.URL.Path == "/cgi/capi" {
-		query := r.URL.Query()
-		if query.Get("serviceType") == "apm" && query.Get("action") == "delegate" {
-			return interceptYunAPI
-		}
-	}
-
-	// 规则 2：直连 API 格式 — /_api/apm/{Action}（GET 或 POST）
-	if strings.HasPrefix(r.URL.Path, "/_api/apm/") {
-		return interceptDirectAPI
-	}
-
-	return interceptNone
-}
-
-// processIntercept 处理被拦截的请求，返回构建好的 HTTP 响应（不直接写 conn）
-func (p *ForwardProxy) processIntercept(r *http.Request) *http.Response {
-	startTime := time.Now()
-
-	// 读取请求体（handleMITM 中已预读到内存，这里可安全读取）
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		recordTraceIntercept(r.URL.Query().Get("cmd"), http.StatusBadRequest, time.Since(startTime))
-		return buildErrorResponse(http.StatusBadRequest, "read body failed")
-	}
-	r.Body.Close()
-
-	// 使用现有 handler 逻辑处理
-	resp := p.handler.processRequest(body)
-
-	// 构建 HTTP 响应
-	httpResp := &http.Response{
-		StatusCode:    resp.statusCode,
-		Status:        http.StatusText(resp.statusCode),
-		Proto:         "HTTP/1.1",
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		Header:        make(http.Header),
-		Body:          io.NopCloser(bytes.NewReader(resp.body)),
-		ContentLength: int64(len(resp.body)),
-	}
-	httpResp.Header.Set("Content-Type", "application/json; charset=utf-8")
-	httpResp.Header.Set("Content-Length", fmt.Sprintf("%d", len(resp.body)))
-	httpResp.Header.Set("Access-Control-Allow-Origin", "*")
-
-	// 诊断追踪
-	recordTraceIntercept(r.URL.Query().Get("cmd"), resp.statusCode, time.Since(startTime))
-
-	return httpResp
-}
-
-// processDirectAPI 处理直连 API 格式的拦截请求
-// URL 格式：/_api/apm/{Action}?uin=...&ownerUin=...&其他参数
-// 请求体格式与 yunapi 相同：{cmd, serviceType, data, regionId, uin, ownerUin}
-// 需要复用 handler 的拆包（buildBackendRequest）+ 组包（wrapResponse）逻辑
-func (p *ForwardProxy) processDirectAPI(r *http.Request) *http.Response {
-	// CORS 预检请求（OPTIONS）：直接返回允许跨域的响应
-	// 浏览器从 console.cloud.tencent.com 跨域请求 console-hc.cloud.tencent.com 时，
-	// 会先发 OPTIONS 预检，必须返回正确的 CORS 头才能继续发实际请求
-	if r.Method == http.MethodOptions {
-		return p.buildCORSPreflightResponse(r)
-	}
-
-	startTime := time.Now()
-
-	// 从路径提取 Action（用于日志，实际 Action 由 body 中的 cmd 字段决定）
-	action := strings.TrimPrefix(r.URL.Path, "/_api/apm/")
-	if action == "" {
-		recordTraceIntercept("unknown", http.StatusBadRequest, time.Since(startTime))
-		return buildErrorResponse(http.StatusBadRequest, "missing action in path")
-	}
-
-	// 读取请求体
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		recordTraceIntercept(action, http.StatusBadRequest, time.Since(startTime))
-		return buildErrorResponse(http.StatusBadRequest, "read body failed")
-	}
-	r.Body.Close()
-
-	// 复用 handler 的完整 pipeline（拆包 + 转发 + 组包）
-	// body 格式与 yunapi 相同：{cmd, serviceType, data, regionId, uin, ownerUin}
-	resp := p.handler.processRequest(body)
-
-	// 构建 HTTP 响应
-	httpResp := &http.Response{
-		StatusCode:    resp.statusCode,
-		Status:        http.StatusText(resp.statusCode),
-		Proto:         "HTTP/1.1",
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		Header:        make(http.Header),
-		Body:          io.NopCloser(bytes.NewReader(resp.body)),
-		ContentLength: int64(len(resp.body)),
-	}
-	httpResp.Header.Set("Content-Type", "application/json; charset=utf-8")
-	httpResp.Header.Set("Content-Length", fmt.Sprintf("%d", len(resp.body)))
-	setCORSHeaders(httpResp.Header, r)
-
-	// 诊断追踪
-	recordTraceIntercept(action, resp.statusCode, time.Since(startTime))
-
-	return httpResp
-}
 
 // processForward 透传请求到原始目标服务器，返回构建好的 HTTP 响应（不直接写 conn）
 // 注意：返回的 resp.Body 需要调用方在写完后 Close，以释放上游连接回连接池
@@ -526,7 +452,7 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	proxyReq, err := http.NewRequest(method, upstreamURL, body)
 	if err != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> CREATE ERR: %v", method, path, err)
-		recordTraceFWD(method, path, 0, time.Since(startTime), false, err.Error())
+		recordTraceFWD(method, hostname, path, 0, time.Since(startTime), false, err.Error())
 		return buildErrorResponse(http.StatusBadGateway, "create upstream request failed")
 	}
 
@@ -553,7 +479,7 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	resp, err := p.pooledClient.Do(proxyReq)
 	if err != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> ERR (%.0fms): %v", method, path, time.Since(startTime).Seconds()*1000, err)
-		recordTraceFWD(method, path, 0, time.Since(startTime), false, err.Error())
+		recordTraceFWD(method, hostname, path, 0, time.Since(startTime), false, err.Error())
 		return buildErrorResponse(http.StatusBadGateway, "upstream request failed")
 	}
 
@@ -571,7 +497,7 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 
 	if readErr != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> read body ERR: %v", method, path, readErr)
-		recordTraceFWD(method, path, resp.StatusCode, time.Since(startTime), false, readErr.Error())
+		recordTraceFWD(method, hostname, path, resp.StatusCode, time.Since(startTime), false, readErr.Error())
 		return buildErrorResponse(http.StatusBadGateway, "read upstream response failed")
 	}
 
@@ -599,7 +525,7 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	}
 
 	// 诊断追踪
-	recordTraceFWD(method, path, resp.StatusCode, time.Since(startTime), true, "")
+	recordTraceFWD(method, hostname, path, resp.StatusCode, time.Since(startTime), true, "")
 
 	return httpResp
 }
@@ -670,7 +596,13 @@ func isHopByHop(header string) bool {
 
 // getUpstreamAddr 获取上游服务器地址
 func (p *ForwardProxy) getUpstreamAddr(hostname string) string {
-	// 如果配置了 upstream 映射，使用映射地址
+	// 优先使用注入的规则引擎接口
+	if p.upstreamResolver != nil {
+		if addr, ok := p.upstreamResolver.ResolveUpstream(hostname); ok {
+			return addr
+		}
+	}
+	// 兼容：回退到配置中的 upstream 映射
 	if addr, ok := p.cfg.Proxy.UpstreamMap[hostname]; ok {
 		return addr
 	}
