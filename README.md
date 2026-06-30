@@ -1,357 +1,328 @@
-# yunapi-proxy
+# mitm-proxy
 
-本地模拟 yunapi 网关的代理服务，用于前端页面与本地 tapm-api 后端服务联调。
+一个基于规则脚本的通用 MITM 正向代理框架，支持 HTTPS 拦截、请求改写、API Pipeline 拆包/组包，提供类似 [Whistle](https://wproxy.org/whistle/) 的使用体验。
 
-## 背景
+## ✨ 特性
 
-前端控制台页面和 tapm-api 后端之间有 yunapi 网关服务（`console.cloud.tencent.com/cgi/capi`），导致本地开发时无法直接用前端页面联调后端接口。
+- **规则脚本引擎** — Whistle 兼容语法，支持 hosts 映射、正则 URL 代理、Pipeline 处理
+- **多脚本隔离** — 每个 `.rules` 文件独立管理，互不干扰，支持优先级控制
+- **MITM 透明代理** — 自动签发 TLS 证书，HTTPS 请求解密 + 拦截 + 修改
+- **Pipeline 拆包/组包** — 可插拔适配器，支持 API 格式转换（`pipeline://` 扩展语法）
+- **Web UI 管理面板** — 规则编辑器 + 实时日志 SSE + 系统状态仪表盘
+- **热加载** — 修改规则文件自动重载，无需重启
+- **SSE 流式代理** — `@stream` 标记支持 Webpack HMR、SSE 等长连接
+- **MCP Server** — 内置 JSON-RPC 2.0 接口，支持 AI 助手集成
+- **单一二进制** — Go embed 嵌入所有静态资源，零外部依赖
 
-本服务模拟 yunapi 的请求转换行为，配合 Whistle 代理实现完全透明的本地前后端联调。
+## 🚀 快速开始
 
-## 架构
-
-支持两种模式：
-
-### 模式一：正向代理模式（推荐，无需 Whistle）
-
-```
-┌──────────────┐                    ┌──────────────────┐                  ┌──────────────┐
-│  浏览器       │  HTTPS CONNECT     │  yunapi-proxy     │  POST /api/v1    │  tapm-api    │
-│(SwitchyOmega)│ ───────────────→  │  :8081 (MITM)    │ ──────────────→  │  :16686      │
-│              │ ←───────────────  │  拦截 APM 请求    │ ←──────────────  │              │
-└──────────────┘                    │  透传其他请求 →    │                  └──────────────┘
-                                    │      ↓            │
-                                    │  9.223.72.139     │ (测试环境)
-                                    └──────────────────┘
-```
-
-### 模式二：Whistle 转发模式
-
-```
-┌──────────────┐                    ┌─────────────┐                   ┌────────────────┐                  ┌──────────────┐
-│  浏览器       │  HTTPS请求         │  Whistle     │  HTTP转发          │  yunapi-proxy   │  POST /api/v1    │  tapm-api    │
-│ (Whistle代理) │ ───────────────→  │  拦截&转发    │ ──────────────→   │  localhost:8080 │ ──────────────→  │  :16686      │
-│              │ ←───────────────  │             │ ←──────────────   │  格式转换+包装   │ ←──────────────  │              │
-└──────────────┘  包装后的响应       └─────────────┘                   └────────────────┘                  └──────────────┘
-```
-
-## 核心功能
-
-| 功能 | 说明 |
-|------|------|
-| 请求格式转换 | 前端 `{cmd, serviceType, data}` → 后端 `{Action, Uin, SubAccountUin, AppId, Region, ...data}` |
-| 认证信息注入 | 模拟 yunapi 注入 Uin、SubAccountUin、AppId 等鉴权字段 |
-| Region 映射 | 前端 regionId (数字) → 后端 Region (字符串，如 `ap-guangzhou`) |
-| 响应包装 | 后端响应 → 前端期望的三层嵌套格式 |
-| CORS 透明 | 通过 Whistle 代理，域名不变，无跨域问题 |
-
-## 快速开始
-
-### 前置条件
-
-- Go 1.21+
-- [Whistle](https://wproxy.org/whistle/) 已安装并运行
-- 浏览器已配置 Whistle 代理
-- 本地 tapm-api 服务已启动（默认 `:16686`）
-
-### 1. 克隆并编译
+### 1. 编译
 
 ```bash
-git clone git@git.woa.com:junjiewwang/yunapi-proxy.git
-cd yunapi-proxy
-go build -o yunapi-proxy .
+git clone <repo-url>
+cd mitm-proxy
+go build -o mitm-proxy .
 ```
 
-### 2. 修改配置
+### 2. 创建规则脚本
 
-编辑 `config.yaml`，根据你的环境修改：
+创建 `rules/my-dev.rules`：
+
+```bash
+# 声明需要 MITM 拦截的域名
+@name "本地开发"
+@priority 100
+
+@intercept api.example.com
+
+# Hosts 映射
+192.168.1.100 api.example.com
+
+# 正则匹配 → URL 重写（反向代理到本地 dev-server）
+/\/static\/(app[\w-]*)\.js$/  http://127.0.0.1:3000/$1.js
+
+# Webpack HMR 流式代理
+/\/__webpack_hmr$/  http://127.0.0.1:3000/__webpack_hmr  @stream
+```
+
+### 3. 配置 `config.yaml`
 
 ```yaml
 server:
-  listen: ":8080"
+  listen: ":8082"       # 管理面板 + REST API
 
+proxy:
+  enable: true
+  listen: ":8081"       # 代理端口
+  cert_dir: "certs"
+
+rules:
+  dir: "rules"
+  hot_reload: true
+  watch_interval: 2s
+```
+
+### 4. 启动
+
+```bash
+./mitm-proxy
+# 或指定配置文件路径
+./mitm-proxy /path/to/config.yaml
+```
+
+### 5. 安装 CA 证书
+
+首次启动会在 `certs/` 目录生成 CA 证书，需要安装并信任：
+
+```bash
+# macOS
+security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain certs/ca.crt
+
+# Linux (Debian/Ubuntu)
+sudo cp certs/ca.crt /usr/local/share/ca-certificates/mitm-proxy.crt
+sudo update-ca-certificates
+```
+
+### 6. 配置浏览器代理
+
+使用 [SwitchyOmega](https://chrome.google.com/webstore/detail/proxy-switchyomega) 等插件：
+
+- 代理协议：`HTTP`
+- 代理服务器：`127.0.0.1`
+- 代理端口：`8081`
+
+### 7. 打开管理面板
+
+浏览器访问 `http://localhost:8082/ui/`
+
+## 📖 规则语法参考
+
+### Hosts 映射
+
+```bash
+# IP domain1 domain2 ...（兼容 Whistle / /etc/hosts 格式）
+192.168.1.100 api.example.com www.example.com
+```
+
+### 正则 URL 代理
+
+```bash
+# /regex/  target_url  [@options]
+# 支持捕获组 $1~$9
+/\/api\/(v\d+)\/users/  http://127.0.0.1:3000/api/$1/users
+
+# 带 @cors 自动处理跨域
+/\/api\/data/  http://127.0.0.1:3000/api/data  @cors
+
+# 带 @stream 支持 SSE/chunked 长连接
+/\/__webpack_hmr$/  http://127.0.0.1:3000/__webpack_hmr  @stream
+```
+
+### Pipeline 代理
+
+```bash
+# /regex/  pipeline://adapter_name  [@options]
+# 匹配的请求经过 Pipeline 适配器处理（拆包→认证→转发→组包）
+/\/cgi\/api\?.*serviceType=myapp/  pipeline://yunapi  @cors
+```
+
+### MITM 拦截域名
+
+```bash
+# @intercept domain — 声明需要 MITM 解密的域名
+@intercept api.example.com
+@intercept cdn.example.com
+```
+
+### 元指令
+
+```bash
+@name "脚本名称"       # 在 Web UI 中显示的名称
+@priority 100          # 优先级（越高越先匹配）
+```
+
+### Options
+
+| Option | 说明 |
+|--------|------|
+| `@stream` | SSE/chunked 流式代理（不读完 Body） |
+| `@cors` | 自动处理 OPTIONS 预检 + CORS 响应头 |
+
+### 注释
+
+```bash
+# 以 # 开头的行是注释
+```
+
+## 🏗 架构总览
+
+```
+                          ┌─────────────────┐
+                          │    Web UI        │
+                          │  localhost:8082  │
+                          └────────┬────────┘
+                                   │ REST API / SSE
+┌──────────┐    CONNECT    ┌───────▼────────┐
+│  浏览器   │ ──────────→ │  ForwardProxy   │
+│(代理模式) │ ←────────── │  :8081 (MITM)   │
+└──────────┘              └───────┬────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    ▼              ▼              ▼
+             ┌───────────┐ ┌───────────┐ ┌───────────┐
+             │ RuleEngine │ │ Processor │ │ Pipeline  │
+             │  匹配规则   │ │ URL 重写   │ │ 拆包/组包  │
+             └───────────┘ └───────────┘ └───────────┘
+```
+
+### 目录结构
+
+```
+mitm-proxy/
+├── main.go              # 启动入口：配置 → 规则引擎 → 代理 → 启动
+├── config.yaml          # 系统级配置
+├── proxy.go             # 代理核心：MITM / Tunnel / 并发处理 / 有序响应
+├── dispatch.go          # 处理器调度：根据 MatchResult 分发到 Proxy/Pipeline/Stream
+├── transport.go         # 通用反向代理 + 流式代理
+├── handler.go           # Pipeline 处理引擎（拆包 → 认证 → 转发 → 组包）
+├── debug.go             # 诊断收集器 + Debug 面板
+├── mcp.go               # MCP Server（JSON-RPC 2.0）
+│
+├── rule/                # 规则引擎包
+│   ├── parser.go        #   规则文件解析器
+│   ├── engine.go        #   匹配引擎（ShouldIntercept / ResolveUpstream / Match）
+│   ├── manager.go       #   规则管理（CRUD / 启停 / 热加载）
+│   ├── script.go        #   脚本数据结构
+│   └── types.go         #   Rule / RuleType / MatchResult 类型
+│
+├── proxy/               # 代理核心类型
+│   └── types.go         #   MatchResult / RuleType 等核心类型定义
+│
+├── processor/           # 处理器集合
+│   ├── proxy.go         #   ProxyProcessor（正则 → URL 重写）
+│   ├── pipeline.go      #   PipelineProcessor（调用适配器）
+│   └── stream.go        #   StreamProcessor（SSE 流式代理）
+│
+├── pipeline/            # Pipeline 处理引擎
+│   ├── interfaces.go    #   阶段接口定义
+│   ├── context.go       #   PipelineContext 上下文
+│   └── pipeline.go      #   编排器
+│
+├── adapter/             # 可插拔适配器
+│   └── interfaces.go    #   Adapter 接口
+│
+├── webui/               # Web UI 管理面板
+│   ├── webui.go         #   SSE 广播 + 路由注册
+│   └── static/          #   前端静态资源（embed 嵌入）
+│
+├── rules/               # 规则脚本目录
+│   └── *.rules          #   规则脚本文件
+│
+└── examples/            # 示例配置和规则
+```
+
+## ⚙️ 配置参考
+
+### config.yaml 完整配置
+
+```yaml
+# 管理服务配置
+server:
+  listen: ":8082"          # 管理面板 + REST API + MCP Server
+
+# 后端服务（Pipeline 适配器转发目标）
 backend:
   url: "http://127.0.0.1:16686"
   api_path: "/api/v1"
   timeout: 30s
 
-# 修改为你自己的账号信息
+# Pipeline 适配器认证（可选）
 mock_auth:
-  uin: "1500000686"              # 主账号 UIN (对应前端 ownerUin)
-  sub_account_uin: "700001199694" # 子账号 UIN (对应前端 uin)
-  app_id: 251005942
+  uin: "your-uin"
+  sub_account_uin: "your-sub-uin"
+  app_id: 0
 
+# 正向代理
+proxy:
+  enable: true
+  listen: ":8081"          # 代理端口
+  cert_dir: "certs"        # CA 证书目录
+  hosts_file: ""           # 额外的 hosts 文件（可选）
+  intercept_domains: []    # 额外的 MITM 域名（通常由 @intercept 管理）
+  upstream_map: {}         # 额外的上游映射
+
+# 规则引擎
+rules:
+  dir: "rules"             # 规则脚本目录
+  hot_reload: true         # 文件变化自动重载
+  watch_interval: 2s
+
+# Region 映射（Pipeline 适配器使用，可选）
 region_map:
   1: "ap-guangzhou"
   4: "ap-shanghai"
-  8: "ap-beijing"
-  # ... 更多 region 映射见 config.yaml
 ```
 
-### 3. 启动代理服务
+## 🔌 REST API
 
 ```bash
-# 方式一：直接运行
-go run .
+# 规则管理
+GET    /api/rules              # 列表
+POST   /api/rules              # 创建 {name, content}
+GET    /api/rules/:id          # 详情
+PUT    /api/rules/:id          # 更新 {content}
+DELETE /api/rules/:id          # 删除
 
-# 方式二：运行编译产物
-./yunapi-proxy
+# 启停控制
+POST   /api/rules/:id/enable   # 启用
+POST   /api/rules/:id/disable  # 禁用
+POST   /api/rules/:id/reload   # 重载
 
-# 方式三：指定配置文件路径
-./yunapi-proxy /path/to/your/config.yaml
+# 批量操作
+POST   /api/rules/reload-all   # 全部重载
+POST   /api/rules/validate     # 校验 {content}
+
+# 系统状态
+GET    /api/status             # 运行状态
+GET    /api/events             # SSE 实时日志
 ```
 
-启动后会输出：
-```
-Starting yunapi-proxy...
-  Listen: :8080
-  Backend: http://127.0.0.1:16686/api/v1
-  MockAuth: Uin=1500000686, SubAccountUin=700001199694, AppId=251005942
-  Proxy: :8081 (intercept: [console.cloud.tencent.com])
-[Proxy] Forward proxy listening on :8081
-[Proxy] Configure SwitchyOmega: HTTP proxy → 127.0.0.1:8081
-```
+## 🔧 MCP 工具
 
-### 4. 配置代理
+内置 MCP Server 支持 AI 助手集成（如 Claude、CodeBuddy）：
 
-#### 方式 A：正向代理 + SwitchyOmega（推荐）
+| 工具 | 说明 |
+|------|------|
+| `proxy_status` | 获取代理状态：连接数、请求统计、后端地址 |
+| `proxy_requests` | 获取最近请求列表（支持过滤） |
+| `proxy_errors` | 获取错误请求列表 |
+| `proxy_connections` | 获取 MITM 连接池状态 |
+| `proxy_curl` | 生成 curl 测试命令 |
 
-无需 Whistle，直接通过浏览器插件：
+MCP 端点：`POST /mcp`（JSON-RPC 2.0）
 
-**Step 1**: 启动后会自动生成 CA 证书到 `certs/ca.crt`，安装并信任它：
+## 🏗 Pipeline 适配器开发
 
-```bash
-# macOS 安装 CA 证书
-security add-trusted-cert -d -r trustRoot -k ~/Library/Keychains/login.keychain certs/ca.crt
-```
+要支持新的 API 格式转换，实现 `Adapter` 接口：
 
-**Step 2**: 在 Chrome 安装 [SwitchyOmega](https://chrome.google.com/webstore/detail/proxy-switchyomega) 插件
-
-**Step 3**: 创建一个代理情景模式：
-- 名称: `yunapi-proxy`
-- 代理协议: `HTTP`
-- 代理服务器: `127.0.0.1`
-- 代理端口: `8081`
-
-**Step 4**: 创建一个自动切换模式：
-- 规则: `*.cloud.tencent.com` → 使用 `yunapi-proxy` 情景模式
-- 默认: 直接连接
-
-**Step 5**: 在 SwitchyOmega 选择你创建的自动切换模式
-
-> 注意：如果你同时还需要走 Whistle 做其他域名的 host 映射，可以把默认代理设为 Whistle（`127.0.0.1:8899`），
-> 只有 `console.cloud.tencent.com` 走 yunapi-proxy。
-
-#### 方式 B：Whistle 转发模式
-
-在 Whistle 的 Rules 面板中添加：
-
-```
-console.cloud.tencent.com/cgi/capi http://127.0.0.1:8080/cgi/capi
+```go
+type Adapter interface {
+    Name() string                           // 适配器名称（被 pipeline:// 引用）
+    Init(rawConfig map[string]any) error    // 初始化
+    GetPipeline() *Pipeline                 // 返回处理管道
+    Close() error                           // 清理资源
+}
 ```
 
-### 5. 开始联调
+Pipeline 由四个阶段组成：
 
-浏览器通过 Whistle 代理访问控制台页面，所有发往 yunapi 的请求会被自动拦截并转发到本地后端。
+1. **RequestTransformer** — 拆包：提取/重命名/扁平化请求字段
+2. **AuthInjector** — 认证注入（可选）
+3. **Forwarder** — 转发到后端
+4. **ResponseTransformer** — 组包：包装/重命名/嵌套响应结构
 
-## 配置说明
+在规则脚本中通过 `pipeline://adapter_name` 引用。
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `server.listen` | 代理服务监听地址 | `:8080` |
-| `backend.url` | tapm-api 后端地址 | `http://127.0.0.1:16686` |
-| `backend.api_path` | 后端统一入口路径 | `/api/v1` |
-| `backend.timeout` | 转发超时时间 | `30s` |
-| `mock_auth.uin` | 主账号 UIN | - |
-| `mock_auth.sub_account_uin` | 子账号 UIN | - |
-| `mock_auth.app_id` | AppId | - |
-| `region_map` | regionId → Region 映射 | 见 config.yaml |
+## 📄 License
 
-### 正向代理配置
-
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| `proxy.enable` | 是否启用正向代理 | `false` |
-| `proxy.listen` | 正向代理监听地址 | `:8081` |
-| `proxy.cert_dir` | CA 证书存储目录 | `certs` |
-| `proxy.hosts_file` | Whistle 格式 hosts 文件路径 | - |
-| `proxy.intercept_domains` | MITM 拦截域名列表 | `["console.cloud.tencent.com"]` |
-| `proxy.upstream_map` | 额外域名 → IP 映射 | `{}` |
-
-### hosts 文件格式
-
-Whistle 标准格式，与 `hosts.txt` 或 `config.yaml` 中的 `upstream_map` 合并生效：
-
-```
-# 支持多个域名指向同一 IP
-9.223.72.139 console.cloud.tencent.com buy.cloud.tencent.com
-
-# CDN 环境
-139.199.214.200 cloudcache.tencent-cloud.com
-```
-
-- 非拦截域名的 HTTPS 连接会按此映射透传到对应 IP
-- 未在映射表中的域名走正常 DNS 解析
-- 只处理域名映射，跳过带路径的规则（如 `cloud.tencent.com/password/recover`）
-- 如果你的原始 Whistle 规则有更新，直接编辑 `hosts.txt` 即可，无需改代码
-
-## 请求/响应转换规则
-
-### 前端 → 后端（拆包规则）
-
-前端发送给 `console.cloud.tencent.com/cgi/capi` 的请求包括：
-
-| 来源 | 字段 | 说明 |
-|------|------|------|
-| URL Query | `action=delegate`、`serviceType=apm`、`uin`、`ownerUin` | 路由与认证参数 |
-| Body JSON | `cmd`、`serviceType`、`data`、`regionId` | 业务参数 |
-
-**转换规则（5 条）：**
-
-| # | 规则 | 前端字段 | 后端字段 | 举例 |
-|---|------|----------|----------|------|
-| 1 | **Action 映射** | `cmd` | → `Action` | `DescribeApmServiceMetric` |
-| 2 | **ApiModule 注入** | `serviceType` | → `ApiModule` | `apm` |
-| 3 | **认证注入** | `uin` / `ownerUin` | → `Uin` / `SubAccountUin` | 优先用 URL 值，fallback `mock_auth` 配置 |
-| 4 | **Region 映射** | `regionId` (数字) | → `Region` (字符串) | `16` → `ap-chongqing` |
-| 5 | **data 扁平化** | `data.*` | → 顶层字段 | `data.Version` → `Version` |
-
-**保护字段**（data 中的字段不能覆盖）：`Uin`、`SubAccountUin`、`AppId`、`Action`、`ApiModule`
-
-**示例**：
-
-```
-前端发送:
-{"cmd":"DescribeApmServiceMetric", "serviceType":"apm",
- "data":{"Version":"2021-06-22","InstanceId":"apm-test"},
- "regionId":1}
-
-↓ 转换后发给后端:
-
-{"Action":"DescribeApmServiceMetric","ApiModule":"apm",
- "Uin":"1500000686","SubAccountUin":"700001199694","AppId":251005942,
- "Region":"ap-guangzhou","Version":"2021-06-22","InstanceId":"apm-test"}
-```
-
-### 后端 → 前端（组包规则）
-
-后端返回格式：`{"Response": {实际数据, "RequestId": "..."}}`
-
-| 情况 | 后端返回 | 说明 |
-|------|----------|------|
-| 成功 | `{"Response":{"Data":{...},"RequestId":"..."}}` | `Data` 包含业务结果 |
-| 失败 | `{"Response":{"Error":{"Code":"...","Message":"..."},"RequestId":"..."}}` | `Error` 包含错误信息 |
-
-**包装逻辑**：后端 `Response.*` → 前端 `data.data.Response.*` 的三层嵌套：
-
-```
-后端响应:
-{"Response":{"Instances":[...],"RequestId":"abc-123"}}
-
-↓ 包装后返回前端:
-
-{"code":0, "data":{"code":0, "cgwerrorCode":0,
-  "data":{"Response":{"Instances":[...],"RequestId":"abc-123"}}},
- "mccode":0, "errObj":{}, "reqId":"...", "seqId":"..."}
-```
-
-**各层字段含义**：
-
-| 层级 | 字段 | 值规则 |
-|------|------|--------|
-| 顶层 | `code` | **始终 0** |
-| 顶层 | `mccode` | **始终 0** |
-| 顶层 | `errObj` | **始终 {}** |
-| 顶层 | `seqId` / `reqId` | 代理生成的追踪 ID |
-| 中间层 | `data.code` | 成功=0，失败=错误码 |
-| 中间层 | `data.cgwerrorCode` | **始终 0** |
-| 中间层 | `data.data` | 内层容器 |
-| 内层 | `data.data.Response` | **后端原始响应内容**（`{"Data":...}` 或 `{"Error":...}`）
-
-### 总结公式
-
-```
-拆包：{cmd, serviceType, data, regionId}
-    → {Action=cmd, ApiModule=serviceType, +auth, Region, ...flatten(data)}
-
-组包：{"Response": 内容}
-    → {code:0, data:{code:0, data:{Response: 内容}}, mccode:0, errObj:{}}
-```
-
-## 健康检查
-
-```bash
-curl http://127.0.0.1:8080/health
-# 返回: {"status":"ok"}
-```
-
-## 项目结构
-
-```
-yunapi-proxy/
-├── main.go          # 入口、配置加载、Whistle hosts 解析
-├── handler.go       # 请求转换、转发、响应包装核心逻辑
-├── proxy.go         # 正向代理（HTTP CONNECT + MITM 拦截）
-├── cert.go          # CA 证书生成与域名证书动态签发
-├── config.yaml      # 配置文件
-├── hosts.txt        # Whistle 格式 hosts 映射（IP domain）
-├── certs/           # 自动生成的 CA 证书（首次启动生成）
-│   ├── ca.crt       # CA 证书（需安装信任）
-│   └── ca.key       # CA 私钥
-├── go.mod / go.sum  # Go 模块依赖
-└── docs/
-    └── yunapi-proxy.md  # 详细需求文档
-```
-
-## 连接管理架构
-
-### ConnManager（LRU 淘汰机制）
-
-MITM 连接由 `ConnManager` 管理，采用**有界槽位 + 最近最少使用淘汰**策略：
-
-```
-[活跃端]                                     [淘汰端]
- slot[0] ➤ slot[1] ➤ slot[2] ... slot[97] ➤ slot[98] ➤ slot[99]  (max=100)
-
-新连接 → 插入 [0]，现有后移            满时扫描淘汰端
-活跃请求 → Touch 提升到 [0]           闲置 > 10s → 踢除
-连接关闭 → 移出槽位
-```
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `maxConns` | 100 | 最大 MITM 连接数 |
-| `idleTimeout` | 10s | 闲置超时（槽位满时触发淘汰） |
-
-每 30s 统计日志：`[ConnMgr] Stats: active_mitm=12, total_evicted=3`
-
-### 请求处理优先级
-
-```
-新请求到达 → MITM 管道
-  ├── 槽位未满   → 立即处理（热烈路径）   ← 新 session 秒级响应
-  ├── 已满+闲置  → 踢旧换新（🔄 淘汰）    ← 旧 session 让位
-  └── 已满+活跃  → 拒绝（🚫 保护）        ← 防止雪崩
-```
-
-## 常见问题
-
-### Q: 联调时前端报跨域错误？
-
-A: 确保浏览器走的是 Whistle 代理。Whistle 转发后前端看到的域名仍是 `console.cloud.tencent.com`，不会有跨域问题。
-
-### Q: 响应格式不对，前端解析失败？
-
-A: 不同接口的后端返回格式可能有细微差异，可以在 `handler.go` 的 `wrapResponse` 方法中按 Action 做特殊处理。
-
-### Q: 如何查看转发的详细日志？
-
-A: 服务默认使用 Gin 的 Debug 模式，所有请求都会打印在终端。也可以在 Whistle 中查看请求/响应详情。
-
-### Q: 如何支持新的 region？
-
-A: 在 `config.yaml` 的 `region_map` 中添加对应的 regionId → Region 字符串映射即可。
-
-## License
-
-Internal use only.
+MIT License
