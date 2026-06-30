@@ -16,7 +16,6 @@ type mcpServer struct {
 	collector *DebugCollector
 	connMgr   *ConnManager
 	cfg       *Config
-	handler   *handler
 }
 
 type jsonRPCRequest struct {
@@ -94,8 +93,9 @@ var mcpTools = []mcpTool{
 		InputSchema: inputSchema{
 			Type: "object",
 			Properties: map[string]property{
-				"cmd": {Type: "string", Description: "yunapi cmd，如 DescribeApmServiceMetric"},
-				"data": {Type: "string", Description: "JSON body 的 data 字段"},
+				"url":    {Type: "string", Description: "目标 URL（完整路径，如 https://example.com/api/test）"},
+				"method": {Type: "string", Description: "HTTP 方法，默认 GET"},
+				"data":   {Type: "string", Description: "POST 请求体（JSON 格式）"},
 			},
 		},
 	},
@@ -150,7 +150,7 @@ func (s *mcpServer) handleInit(req *jsonRPCRequest) *jsonRPCResponse {
 				"tools": map[string]interface{}{},
 			},
 			"serverInfo": map[string]interface{}{
-				"name":    "yunapi-proxy",
+				"name":    "mitm-proxy",
 				"version": "2.0.0",
 			},
 		},
@@ -319,28 +319,41 @@ func (s *mcpServer) toolConnections() interface{} {
 }
 
 func (s *mcpServer) toolCurl(args map[string]interface{}) interface{} {
-	cmd := "DescribeMetricRecords"
-	data := `{"Version":"2021-06-22","InstanceId":"apm-test"}`
+	targetURL := "https://example.com/api/test"
+	method := "GET"
+	data := ""
 
-	if c, ok := args["cmd"].(string); ok && c != "" {
-		cmd = c
+	if u, ok := args["url"].(string); ok && u != "" {
+		targetURL = u
+	}
+	if m, ok := args["method"].(string); ok && m != "" {
+		method = m
 	}
 	if d, ok := args["data"].(string); ok && d != "" {
 		data = d
 	}
 
-	curl := fmt.Sprintf(
-		`curl --proxy http://127.0.0.1%s -k -s -X POST \
-  'https://console.cloud.tencent.com/cgi/capi?cmd=%s&action=delegate&serviceType=apm' \
+	var curl string
+	if data != "" {
+		curl = fmt.Sprintf(
+			`curl --proxy http://127.0.0.1%s -k -s -X %s \
+  '%s' \
   -H 'Content-Type: application/json' \
-  --data-raw '{"cmd":"%s","serviceType":"apm","data":%s}'`,
-		s.cfg.Proxy.Listen, cmd, cmd, data,
-	)
+  --data-raw '%s'`,
+			s.cfg.Proxy.Listen, method, targetURL, data,
+		)
+	} else {
+		curl = fmt.Sprintf(
+			`curl --proxy http://127.0.0.1%s -k -s -X %s '%s'`,
+			s.cfg.Proxy.Listen, method, targetURL,
+		)
+	}
 
 	return map[string]interface{}{
-		"curl":  curl,
-		"cmd":   cmd,
-		"proxy": "http://127.0.0.1" + s.cfg.Proxy.Listen,
+		"curl":   curl,
+		"method": method,
+		"url":    targetURL,
+		"proxy":  "http://127.0.0.1" + s.cfg.Proxy.Listen,
 	}
 }
 

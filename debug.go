@@ -178,7 +178,7 @@ func registerDebugRoutes(engine *gin.Engine, collector *DebugCollector, connMgr 
 // ========================================
 
 const debugHTML = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>yunapi-proxy Debug</title>
+<html><head><meta charset="UTF-8"><title>Proxy Debug</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:Menlo,Monaco,monospace;background:#0d1117;color:#c9d1d9;padding:20px}
@@ -196,7 +196,7 @@ td .path{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowr
 .flex{display:flex;gap:12px}.flex>*{flex:1}
 .footer{font-size:11px;color:#484f58;margin-top:16px;text-align:center}
 </style></head><body>
-<h1>yunapi-proxy Debug Panel</h1>
+<h1>Proxy Debug Panel</h1>
 <div class="flex">
 <div class="card"><div class="stat"><div class="label">Total Requests</div><div class="value" id="total">-</div></div><div class="stat"><div class="label">Errors</div><div class="value err" id="errors">-</div></div><div class="stat"><div class="label">Uptime</div><div class="value" id="uptime">-</div></div></div>
 <div class="card"><div class="stat"><div class="label">MITM Active</div><div class="value" id="active">-</div></div><div class="stat"><div class="label">MITM Evicted</div><div class="value warn" id="evicted">-</div></div><div class="stat"><div class="label">Backend</div><div class="value" id="backend" style="font-size:12px">-</div></div></div>
@@ -243,14 +243,14 @@ func initDebugCollector() {
 	defaultCollector = NewDebugCollector(200)
 }
 
-func recordTraceFWD(method, path string, status int, latency time.Duration, cached bool, err string) {
+func recordTraceFWD(method, host, path string, status int, latency time.Duration, cached bool, err string) {
 	if defaultCollector == nil {
 		return
 	}
 	defaultCollector.Record(&RequestTrace{
 		Time:       time.Now(),
 		Method:     method,
-		Host:       "console.cloud.tencent.com",
+		Host:       host,
 		Path:       path,
 		StatusCode: status,
 		LatencyMs:  float64(latency.Microseconds()) / 1000.0,
@@ -272,15 +272,15 @@ func recordTraceTunnel(host string) {
 	})
 }
 
-func recordTraceIntercept(cmd string, status int, latency time.Duration) {
+func recordTraceIntercept(host, path string, status int, latency time.Duration) {
 	if defaultCollector == nil {
 		return
 	}
 	defaultCollector.Record(&RequestTrace{
 		Time:       time.Now(),
 		Method:     "POST",
-		Host:       "console.cloud.tencent.com",
-		Path:       "/cgi/capi?cmd=" + cmd,
+		Host:       host,
+		Path:       path,
 		StatusCode: status,
 		LatencyMs:  float64(latency.Microseconds()) / 1000.0,
 		Intercept:  true,
