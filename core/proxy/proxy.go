@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -36,8 +35,6 @@ type ForwardProxy struct {
 	requestMatcher   RequestMatcher    // 请求规则匹配
 	requestProcessor RequestProcessor  // 匹配后的请求处理器
 	traceRecorder    TraceRecorder     // 请求追踪记录器（可选）
-
-	paused atomic.Bool // 暂停标记：true 时拒绝所有请求
 }
 
 // ProxyOption ForwardProxy 的可选配置
@@ -148,12 +145,6 @@ func (p *ForwardProxy) ListenAndServe(addr string) error {
 
 // ServeHTTP 处理代理请求
 func (p *ForwardProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if p.paused.Load() {
-		w.Header().Set("Connection", "close")
-		w.Header().Set("Retry-After", "5")
-		http.Error(w, "Proxy paused (Service Unavailable)", http.StatusServiceUnavailable)
-		return
-	}
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 	} else {
@@ -657,12 +648,3 @@ func truncateStr(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "..."
 }
-
-// Pause 暂停代理（所有请求返回 503）
-func (p *ForwardProxy) Pause() { p.paused.Store(true); log.Println("[Proxy] paused") }
-
-// Resume 恢复代理
-func (p *ForwardProxy) Resume() { p.paused.Store(false); log.Println("[Proxy] resumed") }
-
-// IsPaused 返回当前是否暂停
-func (p *ForwardProxy) IsPaused() bool { return p.paused.Load() }

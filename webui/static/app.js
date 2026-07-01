@@ -641,21 +641,13 @@
   async function loadHosts() {
     try {
       const resp = await fetch('/api/hosts');
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        toast('Load hosts failed: ' + (err.error || resp.status), 'error');
-        return;
-      }
       const data = await resp.json();
       const ta = $('#hostsTextarea');
       if (ta) {
         ta.value = data.content || '';
-        ta.placeholder = '# IP domain1 domain2 (Whistle 格式)\n# 10.0.0.1 console.example.com';
         updateHostsLineNumbers();
       }
-    } catch (e) {
-      toast('Load hosts failed: ' + e.message, 'error');
-    }
+    } catch (e) {}
   }
 
   async function saveHosts() {
@@ -693,35 +685,6 @@
         if (hostsTab && hostsTab.classList.contains('active')) { e.preventDefault(); saveHosts(); }
       }
     });
-  }
-
-  // ========== Proxy Toggle (Pause/Resume) ==========
-  async function refreshProxyStatus() {
-    try {
-      const r = await fetch('/api/proxy/status');
-      if (!r.ok) return;
-      const d = await r.json();
-      const btn = $('#btnProxyToggle');
-      if (btn) {
-        btn.textContent = d.paused ? '▶ Resume' : '⏸ Pause';
-        btn.classList.toggle('btn-danger', d.paused);
-      }
-    } catch (e) {}
-  }
-
-  function initProxyToggle() {
-    const btn = $('#btnProxyToggle');
-    if (!btn) return;
-    btn.addEventListener('click', async () => {
-      const r = await fetch('/api/proxy/status');
-      if (!r.ok) return;
-      const d = await r.json();
-      const endpoint = d.paused ? '/api/proxy/resume' : '/api/proxy/pause';
-      await fetch(endpoint, { method: 'POST' });
-      refreshProxyStatus();
-      toast(d.paused ? 'Proxy resumed' : 'Proxy paused', 'info');
-    });
-    refreshProxyStatus();
   }
 
   // ========== Diagnostics ==========
@@ -882,7 +845,6 @@
     if (btnSaveHosts) btnSaveHosts.addEventListener('click', saveHosts);
     initDiagTabs();
     initHostsEditor();
-    initProxyToggle();
     refreshDiagnostics();
     refreshStatus();
   }
