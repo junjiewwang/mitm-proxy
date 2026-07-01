@@ -2,6 +2,7 @@
 
 BINARY_NAME := mitm-proxy
 MAIN_PATH   := ./cmd/mitm-proxy
+BIN_DIR     := bin
 VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME  := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 LDFLAGS     := -ldflags "-s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)"
@@ -10,16 +11,19 @@ GOFLAGS     := -trimpath
 # === 构建 ===
 
 build:
-	go build $(GOFLAGS) $(LDFLAGS) -o $(BINARY_NAME) $(MAIN_PATH)
+	@mkdir -p $(BIN_DIR)
+	go build $(GOFLAGS) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME) $(MAIN_PATH)
 
 run:
 	go run $(MAIN_PATH)
 
 build-linux:
-	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) $(LDFLAGS) -o $(BINARY_NAME)-linux-amd64 $(MAIN_PATH)
+	@mkdir -p $(BIN_DIR)
+	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_PATH)
 
 build-darwin:
-	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) $(LDFLAGS) -o $(BINARY_NAME)-darwin-arm64 $(MAIN_PATH)
+	@mkdir -p $(BIN_DIR)
+	GOOS=darwin GOARCH=arm64 go build $(GOFLAGS) $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-darwin-arm64 $(MAIN_PATH)
 
 build-all: build-linux build-darwin
 
@@ -51,14 +55,14 @@ lint: vet
 # === 清理 ===
 
 clean:
-	rm -f $(BINARY_NAME) $(BINARY_NAME)-linux-* $(BINARY_NAME)-darwin-*
+	rm -rf $(BIN_DIR)
 	rm -rf dist/
 
 # === 发布 ===
 
 release: lint test build-all
 	@echo "Release artifacts:"
-	@ls -lh $(BINARY_NAME)-*
+	@ls -lh $(BIN_DIR)/$(BINARY_NAME)-*
 
 # === 帮助 ===
 

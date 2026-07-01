@@ -7,3 +7,4 @@ certs/
 dist/
 rules
 hosts.txt
+bin
