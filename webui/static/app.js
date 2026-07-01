@@ -9,11 +9,12 @@
     scripts: [],
     activeScriptId: null,
     editorDirty: false,
-    logs: [],
-    logsPaused: false,
     sseConnected: false,
     sse: null,
     debouncing: false,
+    requests: [],
+    reqPaused: false,
+    reqDetailId: null, // 当前展开的请求索引
   };
 
   // ========== API Layer ==========
@@ -87,6 +88,22 @@
       const resp = await fetch('/api/diagnostics');
       return resp.json();
     },
+    async getRequests(params) {
+      const qs = new URLSearchParams();
+      if (params.type) qs.set('type', params.type);
+      if (params.script) qs.set('script', params.script);
+      if (params.rule_type) qs.set('rule_type', params.rule_type);
+      if (params.url) qs.set('url', params.url);
+      if (params.status) qs.set('status', params.status);
+      qs.set('limit', params.limit || 100);
+      qs.set('offset', params.offset || 0);
+      const resp = await fetch('/api/requests?' + qs.toString());
+      return resp.json();
+    },
+    async getScripts() {
+      const resp = await fetch('/api/scripts');
+      return resp.json();
+    },
   };
 
   // ========== Utilities ==========
@@ -119,6 +136,31 @@
     if (ms < 1) return '<1ms';
     if (ms < 1000) return Math.round(ms) + 'ms';
     return (ms / 1000).toFixed(1) + 's';
+  }
+
+  function shortContentType(ct) {
+    if (!ct) return '--';
+    var m = ct.match(/application\/json/i); if (m) return 'json';
+    m = ct.match(/text\/html/i); if (m) return 'html';
+    m = ct.match(/text\/plain/i); if (m) return 'text';
+    m = ct.match(/text\/css/i); if (m) return 'css';
+    m = ct.match(/(application|text)\/javascript/i); if (m) return 'js';
+    m = ct.match(/image\/(\w+)/i); if (m) return 'img';
+    m = ct.match(/application\/xml/i); if (m) return 'xml';
+    m = ct.match(/application\/x-www-form-urlencoded/i); if (m) return 'form';
+    var parts = ct.split('/');
+    return parts.length > 1 ? parts[1].substring(0, 8) : ct.substring(0, 8);
+  }
+
+  function fmtSize(bytes) {
+    if (bytes == null || bytes === 0) return '--';
+    if (bytes < 1024) return bytes + 'B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + 'K';
+    return (bytes / 1048576).toFixed(1) + 'M';
+  }
+
+  function tryFormatJSON(str) {
+    try { return JSON.stringify(JSON.parse(str), null, 2); } catch(e) { return str; }
   }
 
   function fmtUptime(sec) {
@@ -156,6 +198,7 @@
         $('#tab-' + target).classList.add('active');
         if (target === 'status') { refreshStatus(); refreshDiagnostics(); }
         if (target === 'debug') initDebugTab();
+        if (target === 'requests') { initRequestsTab(); loadRequests(); }
       });
     });
   }
@@ -245,7 +288,7 @@
     try {
       state.scripts = await api.listScripts();
       renderScriptList();
-      updateScriptFilterOptions();
+      updateReqScriptFilter();
       updateDebugScriptSelector();
       $('#scriptCount').textContent = state.scripts.length + ' scripts';
     } catch (e) {
@@ -489,13 +532,13 @@
     });
   }
 
-  // ========== SSE Live Logs ==========
+  // ========== SSE Live Events ==========
   function connectSSE() {
     if (state.sse) state.sse.close();
     state.sse = new EventSource('/api/events');
     state.sse.onopen = () => { state.sseConnected = true; updateSSEStatus(); };
     state.sse.onmessage = function (e) {
-      try { addLogEvent(JSON.parse(e.data)); } catch (err) {}
+      try { onReqEvent(JSON.parse(e.data)); } catch (err) {}
     };
     state.sse.onerror = () => { state.sseConnected = false; updateSSEStatus(); };
   }
@@ -507,67 +550,77 @@
     else { dot.className = 'dot disconnected'; label.textContent = 'DC'; }
   }
 
-  function addLogEvent(evt) {
-    if (state.logsPaused) return;
-    state.logs.push(evt);
-    if (state.logs.length > 500) state.logs = state.logs.slice(-400);
-    if (matchesFilter(evt)) appendLogRow(evt);
-    updateLogCount();
+  function onReqEvent(evt) {
+    if (state.reqPaused) return;
+    // 仅在 Requests Tab 激活时渲染
+    if (!$('#tab-requests') || !$('#tab-requests').classList.contains('active')) return;
+    if (!reqMatchesFilter(evt)) return;
+
+    state.requests.unshift(evt);
+    if (state.requests.length > 500) state.requests = state.requests.slice(0, 500);
+    appendReqRow(evt, true);
+    updateReqCount();
   }
 
-  function matchesFilter(evt) {
-    const tf = $('#logFilterType').value, sf = $('#logFilterScript').value, uf = $('#logFilterURL').value.toLowerCase();
-    if (tf && evt.type !== tf) return false;
-    if (sf && evt.script !== sf) return false;
-    if (uf && (!evt.url || evt.url.toLowerCase().indexOf(uf) === -1)) return false;
+  function reqMatchesFilter(evt) {
+    var tf = $('#reqFilterType'), sf = $('#reqFilterScript'), rf = $('#reqFilterRuleType');
+    var st = $('#reqFilterStatus'), uf = $('#reqFilterURL');
+    if (tf && tf.value && evt.type !== tf.value) return false;
+    if (sf && sf.value && evt.script !== sf.value) return false;
+    if (rf && rf.value && evt.rule_type !== rf.value) return false;
+    if (st && st.value) {
+      var code = evt.status;
+      var sv = st.value;
+      if (sv === '2xx' && !(code >= 200 && code < 300)) return false;
+      if (sv === '3xx' && !(code >= 300 && code < 400)) return false;
+      if (sv === '4xx' && !(code >= 400 && code < 500)) return false;
+      if (sv === '5xx' && !(code >= 500 && code < 600)) return false;
+    }
+    if (uf && uf.value && (!evt.url || evt.url.toLowerCase().indexOf(uf.value.toLowerCase()) === -1)) return false;
     return true;
   }
 
-  function appendLogRow(evt) {
-    const tbody = $('#logBody');
-    const tr = document.createElement('tr');
+  function appendReqRow(evt, prepend) {
+    var tbody = $('#reqBody');
+    if (!tbody) return;
+    var tr = document.createElement('tr');
+    var searchTerm = ($('#reqFilterURL') ? $('#reqFilterURL').value : '').toLowerCase();
+    var urlHtml = escapeHtml(truncate(evt.url || '', 80));
+    if (searchTerm && evt.url) {
+      var escaped = escapeHtml(evt.url);
+      var regex = new RegExp('(' + searchTerm.replace(/[.*+?^{}()|[\]\\]/g, '\\$&') + ')', 'gi');
+      urlHtml = escaped.replace(regex, '<mark class="req-highlight">$1</mark>');
+      urlHtml = truncateHtml(urlHtml, 80);
+    }
+    var statCls = statusClass(evt.status);
     tr.innerHTML =
       '<td class="col-time">' + fmtTime(evt.time) + '</td>' +
       '<td class="col-type"><span class="type-' + (evt.type || 'forward') + '">' + escapeHtml(evt.type || '--') + '</span></td>' +
       '<td class="col-method">' + escapeHtml(evt.method || '--') + '</td>' +
-      '<td class="col-url" title="' + escapeHtml(evt.url || '') + '">' + escapeHtml(truncate(evt.url || '', 80)) + '</td>' +
-      '<td class="col-status ' + statusClass(evt.status) + '">' + (evt.status || '--') + '</td>' +
+      '<td class="col-url" title="' + escapeHtml(evt.url || '') + '">' + urlHtml + '</td>' +
+      '<td class="col-status ' + statCls + '">' + (evt.status || '--') + '</td>' +
+      '<td class="col-ctype" title="' + escapeHtml(evt.content_type || '') + '">' + escapeHtml(shortContentType(evt.content_type)) + '</td>' +
+      '<td class="col-size">' + fmtSize(evt.content_length) + '</td>' +
       '<td class="col-latency">' + fmtLatency(evt.latency_ms) + '</td>' +
       '<td class="col-script">' + escapeHtml(truncate(evt.script || '', 16)) + '</td>' +
-      '<td class="col-target" title="' + escapeHtml(evt.target || '') + '">' + escapeHtml(truncate(evt.target || '', 24)) + '</td>';
-    tbody.appendChild(tr);
-    const wrap = tbody.closest('.log-table-wrap');
-    if (wrap && (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 100)) wrap.scrollTop = wrap.scrollHeight;
-    while (tbody.children.length > 300) tbody.removeChild(tbody.firstChild);
+      '<td class="col-ruletype">' + escapeHtml(evt.rule_type || '--') + '</td>' +
+      '<td class="col-target" title="' + escapeHtml(evt.target || '') + '">' + escapeHtml(truncate(evt.target || '', 30)) + '</td>';
+    var idx = state.requests.indexOf(evt);
+    tr.dataset.idx = idx;
+    tr.addEventListener('click', function () { showReqDetail(idx); });
+    tr.style.cursor = 'pointer';
+    if (prepend) {
+      tbody.insertBefore(tr, tbody.firstChild);
+      // 保持最多 500 行
+      while (tbody.children.length > 500) tbody.removeChild(tbody.lastChild);
+    } else {
+      tbody.appendChild(tr);
+    }
   }
 
-  function updateLogCount() { $('#logCount').textContent = state.logs.length + ' events'; }
-
-  function rerenderLogs() {
-    $('#logBody').innerHTML = '';
-    state.logs.forEach(evt => { if (matchesFilter(evt)) appendLogRow(evt); });
-    updateLogCount();
-  }
-
-  function initLogs() {
-    $('#btnTogglePause').addEventListener('click', function () {
-      state.logsPaused = !state.logsPaused;
-      this.textContent = state.logsPaused ? '▶ Resume' : '⏸ Pause';
-      this.classList.toggle('btn-primary', state.logsPaused);
-    });
-    $('#btnClearLogs').addEventListener('click', () => { state.logs = []; $('#logBody').innerHTML = ''; updateLogCount(); });
-    ['logFilterType', 'logFilterScript', 'logFilterURL'].forEach(id => {
-      const el = $('#' + id);
-      el.addEventListener('change', rerenderLogs);
-      el.addEventListener('input', rerenderLogs);
-    });
-  }
-
-  function updateScriptFilterOptions() {
-    const sel = $('#logFilterScript'), cur = sel.value;
-    while (sel.options.length > 1) sel.remove(1);
-    state.scripts.forEach(s => sel.appendChild(new Option(s.name || s.id, s.name || s.id)));
-    sel.value = cur;
+  function updateReqCount() {
+    var el = $('#reqCount');
+    if (el) el.textContent = state.requests.length + ' events';
   }
 
   // ========== Diagnostics ==========
@@ -650,6 +703,210 @@
         $$('.diag-tab').forEach(t => t.classList.remove('active'));
         this.classList.add('active');
         renderMatchTable();
+      });
+    });
+  }
+
+// ========== Requests Tab ==========
+  function getFilterParams() {
+    return {
+      type: $('#reqFilterType') ? $('#reqFilterType').value : '',
+      script: $('#reqFilterScript') ? $('#reqFilterScript').value : '',
+      rule_type: $('#reqFilterRuleType') ? $('#reqFilterRuleType').value : '',
+      url: $('#reqFilterURL') ? $('#reqFilterURL').value : '',
+      status: $('#reqFilterStatus') ? $('#reqFilterStatus').value : '',
+    };
+  }
+
+  async function loadRequests() {
+    try {
+      var params = getFilterParams();
+      params.limit = 500;
+      params.offset = 0;
+      var data = await api.getRequests(params);
+      state.requests = data.results || [];
+      renderRequestTable();
+    } catch (e) {
+      console.error('Load requests failed:', e);
+      var tbody = $('#reqBody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="color:var(--red);text-align:center">Error: ' + escapeHtml(e.message) + '</td></tr>';
+    }
+  }
+
+  function renderRequestTable() {
+    var tbody = $('#reqBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    if (!state.requests || state.requests.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="11" style="color:var(--text-muted);text-align:center;padding:20px">No requests yet — waiting for traffic...</td></tr>';
+      updateReqCount();
+      return;
+    }
+
+    state.requests.forEach(function (evt, i) {
+      appendReqRow(evt, false);
+      if (state.reqDetailId === i) {
+        var tr = tbody.lastChild;
+        if (tr) tr.classList.add('req-selected');
+      }
+    });
+
+    updateReqCount();
+  }
+
+  function truncateHtml(html, maxLen) {
+    var div = document.createElement('div');
+    div.innerHTML = html;
+    var text = div.textContent || '';
+    if (text.length <= maxLen) return html;
+    return escapeHtml(text.substring(0, maxLen) + '...');
+  }
+
+  function renderHeaders(headers) {
+    if (!headers || Object.keys(headers).length === 0) return '<div style="color:var(--text-muted);padding:8px">No headers</div>';
+    var html = '<table class="header-table">';
+    Object.keys(headers).forEach(function(k) {
+      html += '<tr><td class="hk">' + escapeHtml(k) + '</td><td class="hv">' + escapeHtml(headers[k]) + '</td></tr>';
+    });
+    html += '</table>';
+    return html;
+  }
+
+  function showReqDetail(idx) {
+    var evt = state.requests[idx];
+    if (!evt) return;
+    state.reqDetailId = idx;
+
+    var panel = $('#reqDetailPanel');
+    if (!panel) return;
+    panel.style.display = 'flex';
+
+    $('#reqDetailTitle').textContent = (evt.method || '?') + ' ' + truncate(evt.url || '', 50);
+
+    // Overview tab
+    $('#dt-Overview').innerHTML =
+      '<div class="req-detail-grid">' +
+        '<div class="req-detail-row"><span class="rd-label">Time</span><span class="rd-value">' + escapeHtml(evt.time || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Type</span><span class="rd-value type-' + (evt.type || 'forward') + '">' + escapeHtml(evt.type || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Method</span><span class="rd-value">' + escapeHtml(evt.method || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">URL</span><span class="rd-value url-full">' + escapeHtml(evt.url || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Status</span><span class="rd-value ' + statusClass(evt.status) + '">' + (evt.status || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Content-Type</span><span class="rd-value">' + escapeHtml(evt.content_type || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Size</span><span class="rd-value">' + fmtSize(evt.content_length) + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Latency</span><span class="rd-value">' + fmtLatency(evt.latency_ms) + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Script</span><span class="rd-value">' + escapeHtml(evt.script || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Rule Type</span><span class="rd-value">' + escapeHtml(evt.rule_type || '--') + '</span></div>' +
+        '<div class="req-detail-row"><span class="rd-label">Target</span><span class="rd-value target-full">' + escapeHtml(evt.target || '--') + '</span></div>' +
+        (evt.error ? '<div class="req-detail-row"><span class="rd-label">Error</span><span class="rd-value status-error">' + escapeHtml(evt.error) + '</span></div>' : '') +
+      '</div>';
+
+    // Request tab
+    var reqBodyHtml = evt.req_body ? '<pre class="body-pre">' + escapeHtml(tryFormatJSON(evt.req_body)) + '</pre>'
+                                   : '<div class="empty-body">(no body)</div>';
+    $('#dt-Request').innerHTML =
+      '<div class="detail-section"><h4>Request Headers</h4>' + renderHeaders(evt.req_headers) + '</div>' +
+      '<div class="detail-section"><h4>Request Body</h4>' + reqBodyHtml + '</div>';
+
+    // Response tab
+    var respBodyHtml = evt.resp_body ? '<pre class="body-pre">' + escapeHtml(tryFormatJSON(evt.resp_body)) + '</pre>'
+                                     : '<div class="empty-body">(no body)</div>';
+    $('#dt-Response').innerHTML =
+      '<div class="detail-section"><h4>Response Headers</h4>' + renderHeaders(evt.resp_headers) + '</div>' +
+      '<div class="detail-section"><h4>Response Body</h4>' + respBodyHtml + '</div>';
+
+    // Reset tab state to Overview
+    $$('.req-dtab').forEach(function(t) { t.classList.remove('active'); });
+    var overviewTab = document.querySelector('.req-dtab[data-dtab="overview"]');
+    if (overviewTab) overviewTab.classList.add('active');
+    $$('.req-dtab-content').forEach(function(c) { c.classList.remove('active'); });
+    var overviewContent = $('#dt-Overview');
+    if (overviewContent) overviewContent.classList.add('active');
+
+    $$('#reqBody tr').forEach(function (tr) {
+      tr.classList.toggle('req-selected', parseInt(tr.dataset.idx) === idx);
+    });
+  }
+
+  function updateReqScriptFilter() {
+    var sel = $('#reqFilterScript');
+    if (!sel) return;
+    var cur = sel.value;
+    while (sel.options.length > 1) sel.remove(1);
+    state.scripts.forEach(function (s) {
+      sel.appendChild(new Option(s.name || s.id, s.name || s.id));
+    });
+    if (cur) sel.value = cur;
+  }
+
+  function initRequestsTab() {
+    updateReqScriptFilter();
+  }
+
+  function initReqFilters() {
+    ['reqFilterType', 'reqFilterScript', 'reqFilterRuleType', 'reqFilterStatus'].forEach(function (id) {
+      var el = $('#' + id);
+      if (!el) return;
+      el.addEventListener('change', function () {
+        loadRequests();
+      });
+    });
+
+    var urlFilter = $('#reqFilterURL');
+    if (urlFilter) {
+      var debounceTimer;
+      urlFilter.addEventListener('input', function () {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(function () {
+          loadRequests();
+        }, 300);
+      });
+    }
+
+    var btnPause = $('#btnReqPause');
+    if (btnPause) {
+      btnPause.addEventListener('click', function () {
+        state.reqPaused = !state.reqPaused;
+        this.textContent = state.reqPaused ? '▶ Resume' : '⏸ Pause';
+        this.classList.toggle('btn-primary', state.reqPaused);
+      });
+    }
+
+    var btnRefresh = $('#btnReqRefresh');
+    if (btnRefresh) btnRefresh.addEventListener('click', loadRequests);
+
+    var btnClear = $('#btnReqClear');
+    if (btnClear) {
+      btnClear.addEventListener('click', function () {
+        state.requests = [];
+        state.reqDetailId = null;
+        var tbody = $('#reqBody');
+        if (tbody) tbody.innerHTML = '';
+        var panel = $('#reqDetailPanel');
+        if (panel) panel.style.display = 'none';
+        updateReqCount();
+      });
+    }
+
+    var btnCloseDetail = $('#btnReqDetailClose');
+    if (btnCloseDetail) {
+      btnCloseDetail.addEventListener('click', function () {
+        var panel = $('#reqDetailPanel');
+        if (panel) panel.style.display = 'none';
+        state.reqDetailId = null;
+        $$('#reqBody tr').forEach(function (tr) { tr.classList.remove('req-selected'); });
+      });
+    }
+
+    $$('.req-dtab').forEach(function(tab) {
+      tab.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var dt = this.dataset.dtab;
+        $$('.req-dtab').forEach(function(t){ t.classList.remove('active'); });
+        this.classList.add('active');
+        $$('.req-dtab-content').forEach(function(c){ c.classList.remove('active'); });
+        var el = $('#dt-' + dt.charAt(0).toUpperCase() + dt.slice(1));
+        if (el) el.classList.add('active');
       });
     });
   }
@@ -787,8 +1044,8 @@
     initEditor();
     initNewScriptDialog();
     initReloadAll();
-    initLogs();
     initDebugActions();
+    initReqFilters();
 
     loadScripts();
     connectSSE();

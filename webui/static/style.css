@@ -568,3 +568,131 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
   .debug-layout { flex-direction: column; }
   .debug-left { width: 100%; }
 }
+
+/* ========== Requests Tab ========== */
+.req-table-wrap {
+  flex: 1; overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-height: 0;
+}
+.req-table { font-size: 12px; font-family: var(--font-mono); }
+.req-table thead { position: sticky; top: 0; z-index: 1; }
+.req-table th {
+  padding: 6px 8px; text-align: left;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 11px; font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.req-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-light);
+  white-space: nowrap;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--transition);
+}
+.req-table tbody tr { cursor: pointer; }
+.req-table tbody tr:hover td { background: var(--bg-hover); }
+.req-table tbody tr.req-selected td { background: rgba(88, 166, 255, 0.1); }
+.req-table tbody tr.req-selected td:first-child { border-left: 2px solid var(--accent); }
+.col-ruletype { width: 70px; }
+
+.req-highlight {
+  background: rgba(210, 153, 34, 0.4);
+  color: var(--yellow);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+
+.req-detail-panel {
+  display: none;
+  flex-direction: column;
+  border-top: 1px solid var(--accent);
+  background: var(--bg-secondary);
+  margin-top: 8px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  flex-shrink: 0;
+  max-height: 40%;
+}
+.req-detail-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+.req-detail-title { font-size: 13px; font-weight: 500; color: var(--accent); }
+.req-detail-body {
+  padding: 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+.req-detail-grid { display: flex; flex-direction: column; gap: 6px; }
+.req-detail-row {
+  display: flex; gap: 12px;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.rd-label {
+  width: 90px; flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.rd-value {
+  color: var(--text-primary);
+  word-break: break-all;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.rd-value.url-full { color: var(--accent); }
+.rd-value.target-full { color: var(--green); }
+
+/* Detail Tab Styles */
+.req-detail-tabs { display: flex; gap: 4px; margin: 0 12px; }
+.req-dtab {
+  padding: 3px 10px; background: transparent;
+  border: none; border-bottom: 2px solid transparent;
+  color: var(--text-secondary); font-size: 11px; cursor: pointer;
+}
+.req-dtab:hover { color: var(--text-primary); }
+.req-dtab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.req-dtab-content { display: none; overflow-y: auto; flex: 1; }
+.req-dtab-content.active { display: block; }
+
+.detail-section { margin-bottom: 12px; }
+.detail-section h4 {
+  font-size: 11px; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.header-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.header-table td { padding: 4px 8px; border-bottom: 1px solid var(--border-light); }
+.header-table .hk {
+  width: 180px; color: var(--accent); font-family: var(--font-mono);
+  white-space: nowrap; vertical-align: top;
+}
+.header-table .hv {
+  color: var(--text-primary); font-family: var(--font-mono);
+  word-break: break-all;
+}
+
+.body-pre {
+  margin: 0; padding: 10px; background: var(--bg-primary);
+  border-radius: var(--radius-sm); font-size: 11px;
+  font-family: var(--font-mono); color: var(--text-primary);
+  overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+  max-height: 300px; overflow-y: auto;
+}
+.empty-body { color: var(--text-muted); font-size: 11px; padding: 8px; }
+
+.col-ctype { width: 50px; }
+.col-size { width: 60px; }
+

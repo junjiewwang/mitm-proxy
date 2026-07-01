@@ -29,7 +29,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="rules">📋 Rules</button>
     <button class="tab" data-tab="debug">🐞 Debug</button>
-    <button class="tab" data-tab="logs">📡 Live Logs</button>
+    <button class="tab" data-tab="requests">📡 Requests</button>
     <button class="tab" data-tab="status">📊 Status</button>
   </nav>
 
@@ -115,30 +115,44 @@
     </div>
   </section>
 
-  <!-- ============ Logs Tab ============ -->
-  <section id="tab-logs" class="tab-content">
+  <!-- ============ Requests Tab ============ -->
+  <section id="tab-requests" class="tab-content">
     <div class="toolbar">
       <div class="filter-group">
-        <select id="logFilterType">
+        <select id="reqFilterType">
           <option value="">All Types</option>
           <option value="match">Match</option>
           <option value="forward">Forward</option>
           <option value="tunnel">Tunnel</option>
           <option value="error">Error</option>
-          <option value="script">Script</option>
         </select>
-        <select id="logFilterScript">
+        <select id="reqFilterScript">
           <option value="">All Scripts</option>
         </select>
-        <input type="text" id="logFilterURL" placeholder="Filter by URL..." class="filter-input">
+        <select id="reqFilterRuleType">
+          <option value="">All Rule Types</option>
+          <option value="proxy">Proxy</option>
+          <option value="exact">Exact</option>
+          <option value="script">Script</option>
+          <option value="hosts">Hosts</option>
+        </select>
+        <select id="reqFilterStatus">
+          <option value="">All Status</option>
+          <option value="2xx">2xx Success</option>
+          <option value="3xx">3xx Redirect</option>
+          <option value="4xx">4xx Client Error</option>
+          <option value="5xx">5xx Server Error</option>
+        </select>
+        <input type="text" id="reqFilterURL" placeholder="Search URL..." class="filter-input">
       </div>
       <div class="toolbar-spacer"></div>
-      <button class="btn btn-sm" id="btnTogglePause">⏸ Pause</button>
-      <button class="btn btn-sm" id="btnClearLogs">🗑 Clear</button>
-      <span class="count" id="logCount">0 events</span>
+      <button class="btn btn-sm" id="btnReqPause">⏸ Pause</button>
+      <button class="btn btn-sm" id="btnReqRefresh">↻ Refresh</button>
+      <button class="btn btn-sm" id="btnReqClear">🗑 Clear</button>
+      <span class="count" id="reqCount">0 events</span>
     </div>
-    <div class="log-table-wrap">
-      <table class="log-table">
+    <div class="req-table-wrap">
+      <table class="log-table req-table">
         <thead>
           <tr>
             <th class="col-time">Time</th>
@@ -146,13 +160,32 @@
             <th class="col-method">Method</th>
             <th class="col-url">URL</th>
             <th class="col-status">Status</th>
+            <th class="col-ctype">Type</th>
+            <th class="col-size">Size</th>
             <th class="col-latency">Latency</th>
             <th class="col-script">Script</th>
+            <th class="col-ruletype">Rule</th>
             <th class="col-target">Target</th>
           </tr>
         </thead>
-        <tbody id="logBody"></tbody>
+        <tbody id="reqBody"></tbody>
       </table>
+    </div>
+    <div class="req-detail-panel" id="reqDetailPanel" style="display:none">
+      <div class="req-detail-header">
+        <span class="req-detail-title" id="reqDetailTitle">Request Detail</span>
+        <div class="req-detail-tabs">
+          <button class="req-dtab active" data-dtab="overview">Overview</button>
+          <button class="req-dtab" data-dtab="request">Request</button>
+          <button class="req-dtab" data-dtab="response">Response</button>
+        </div>
+        <button class="btn btn-sm" id="btnReqDetailClose">✕</button>
+      </div>
+      <div class="req-detail-body">
+        <div class="req-dtab-content active" id="dt-Overview"></div>
+        <div class="req-dtab-content" id="dt-Request"></div>
+        <div class="req-dtab-content" id="dt-Response"></div>
+      </div>
     </div>
   </section>
 

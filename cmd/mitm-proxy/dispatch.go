@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -57,7 +58,14 @@ func (d *processorDispatcher) Process(req *http.Request, body []byte, match *Mat
 	// CORS 预检：OPTIONS 请求直接返回 204
 	if match.CORS && req.Method == http.MethodOptions {
 		resp := d.buildCORSPreflightResponse(req)
-		d.broadcastEvent(req, match, resp.StatusCode, time.Since(start), "")
+		// 读取响应体（用于广播），在不影响 resp.Body 的前提下
+		var respBodyBytes []byte
+		if resp != nil && resp.Body != nil {
+			respBodyBytes, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
+		}
+		d.broadcastEvent(req, body, resp, respBodyBytes, match, time.Since(start))
 		return resp
 	}
 
@@ -83,16 +91,20 @@ func (d *processorDispatcher) Process(req *http.Request, body []byte, match *Mat
 		resp = buildErrorResponse(http.StatusInternalServerError, "unknown rule type")
 	}
 
-	errMsg := ""
-	if resp.StatusCode >= 400 {
-		errMsg = resp.Status
+	// 读取响应体（用于广播），在不影响 resp.Body 的前提下
+	var respBodyBytes []byte
+	if resp != nil && resp.Body != nil {
+		respBodyBytes, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
 	}
-	d.broadcastEvent(req, match, resp.StatusCode, time.Since(start), errMsg)
+
+	d.broadcastEvent(req, body, resp, respBodyBytes, match, time.Since(start))
 	return resp
 }
 
 // broadcastEvent 向 SSE 客户端广播请求处理事件
-func (d *processorDispatcher) broadcastEvent(req *http.Request, match *MatchResult, statusCode int, elapsed time.Duration, errMsg string) {
+func (d *processorDispatcher) broadcastEvent(req *http.Request, reqBody []byte, resp *http.Response, respBody []byte, match *MatchResult, elapsed time.Duration) {
 	if d.broadcaster == nil {
 		return
 	}
@@ -107,17 +119,74 @@ func (d *processorDispatcher) broadcastEvent(req *http.Request, match *MatchResu
 		ruleType = "script"
 	}
 
+	// 状态码和错误信息从 resp 推导
+	var statusCode int
+	var errMsg string
+	if resp != nil {
+		statusCode = resp.StatusCode
+		if resp.StatusCode >= 400 {
+			errMsg = resp.Status
+		}
+	}
+
+	// 提取请求头
+	reqHeaders := make(map[string]string)
+	for k, v := range req.Header {
+		reqHeaders[k] = strings.Join(v, ", ")
+	}
+
+	// 截断请求体 (4096 bytes)
+	var reqBodyStr string
+	if len(reqBody) > 0 {
+		if len(reqBody) > 4096 {
+			reqBodyStr = string(reqBody[:4096]) + "\n...(truncated)"
+		} else {
+			reqBodyStr = string(reqBody)
+		}
+	}
+
+	// 提取响应头
+	respHeaders := make(map[string]string)
+	var contentType string
+	var contentLength int64
+	if resp != nil {
+		for k, v := range resp.Header {
+			respHeaders[k] = strings.Join(v, ", ")
+		}
+		contentType = resp.Header.Get("Content-Type")
+		contentLength = resp.ContentLength
+		if contentLength == -1 {
+			contentLength = int64(len(respBody))
+		}
+	}
+
+	// 截断响应体 (4096 bytes)
+	var respBodyStr string
+	if len(respBody) > 0 {
+		if len(respBody) > 4096 {
+			respBodyStr = string(respBody[:4096]) + "\n...(truncated)"
+		} else {
+			respBodyStr = string(respBody)
+		}
+	}
+
 	d.broadcaster.Broadcast(&webui.Event{
-		Type:      "match",
-		Time:      time.Now().Format(time.RFC3339),
-		Method:    req.Method,
-		URL:       req.URL.String(),
-		Status:    statusCode,
-		LatencyMs: elapsed.Milliseconds(),
-		Script:    match.ScriptName,
-		RuleType:  ruleType,
-		Target:    match.Target,
-		Error:     errMsg,
+		Type:          "match",
+		Time:          time.Now().Format(time.RFC3339),
+		Method:        req.Method,
+		URL:           req.URL.String(),
+		Status:        statusCode,
+		LatencyMs:     elapsed.Milliseconds(),
+		Script:        match.ScriptName,
+		RuleType:      ruleType,
+		Target:        match.Target,
+		Error:         errMsg,
+		ReqHeaders:    reqHeaders,
+		ReqBody:       reqBodyStr,
+		RespHeaders:   respHeaders,
+		RespBody:      respBodyStr,
+		ContentType:   contentType,
+		ContentLength: contentLength,
 	})
 }
 

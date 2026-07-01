@@ -37,6 +37,13 @@ type Event struct {
 	RuleType  string `json:"rule_type"`  // 规则类型
 	Target    string `json:"target"`     // 目标地址
 	Error     string `json:"error,omitempty"`
+	// Inspectors 新增字段
+	ReqHeaders    map[string]string `json:"req_headers,omitempty"`
+	ReqBody       string            `json:"req_body,omitempty"`
+	RespHeaders   map[string]string `json:"resp_headers,omitempty"`
+	RespBody      string            `json:"resp_body,omitempty"`
+	ContentType   string            `json:"content_type,omitempty"`
+	ContentLength int64             `json:"content_length,omitempty"`
 }
 
 // EventBroadcaster SSE 事件广播器（多客户端）
@@ -132,6 +139,61 @@ func (b *EventBroadcaster) ClientCount() int {
 // StatusProvider 系统状态提供者接口（由 main.go 注入）
 type StatusProvider interface {
 	GetStatus() map[string]interface{}
+}
+
+// RequestFilter 请求过滤参数
+type RequestFilter struct {
+	Type     string `form:"type"`      // 事件类型：match/forward/tunnel/error/script
+	Script   string `form:"script"`    // 脚本名称
+	RuleType string `form:"rule_type"` // 规则类型：proxy/exact/script/hosts
+	URL      string `form:"url"`       // URL 关键词（大小写不敏感）
+	Status   string `form:"status"`    // 状态码范围：2xx/3xx/4xx/5xx 或具体状态码
+	Limit    int    `form:"limit"`     // 分页大小，默认 100
+	Offset   int    `form:"offset"`    // 偏移量，默认 0
+}
+
+// matchFilter 判断事件是否匹配过滤条件
+func (f *RequestFilter) matchFilter(evt *Event) bool {
+	if evt == nil {
+		return false
+	}
+	if f.Type != "" && evt.Type != f.Type {
+		return false
+	}
+	if f.Script != "" && evt.Script != f.Script {
+		return false
+	}
+	if f.RuleType != "" && evt.RuleType != f.RuleType {
+		return false
+	}
+	if f.URL != "" && !strings.Contains(strings.ToLower(evt.URL), strings.ToLower(f.URL)) {
+		return false
+	}
+	if f.Status != "" && !matchStatusFilter(evt.Status, f.Status) {
+		return false
+	}
+	return true
+}
+
+// matchStatusFilter 判断状态码是否匹配过滤条件
+func matchStatusFilter(status int, filter string) bool {
+	switch filter {
+	case "2xx":
+		return status >= 200 && status < 300
+	case "3xx":
+		return status >= 300 && status < 400
+	case "4xx":
+		return status >= 400 && status < 500
+	case "5xx":
+		return status >= 500 && status < 600
+	default:
+		// 尝试解析为具体状态码
+		var code int
+		if _, err := fmt.Sscanf(filter, "%d", &code); err == nil {
+			return status == code
+		}
+		return true // 无法解析则不过滤
+	}
 }
 
 // RegisterRoutes 注册 Web UI 路由
@@ -355,6 +417,73 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 		result["recent_matches"] = toResult(append(proxyEvents, scriptEvents...))
 
 		c.JSON(http.StatusOK, result)
+	})
+
+	// 请求追踪列表 API（支持过滤+分页）
+	engine.GET("/api/requests", func(c *gin.Context) {
+		var filter RequestFilter
+		if err := c.ShouldBindQuery(&filter); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid query params"})
+			return
+		}
+
+		// 默认值
+		if filter.Limit <= 0 || filter.Limit > 1000 {
+			filter.Limit = 100
+		}
+		if filter.Offset < 0 {
+			filter.Offset = 0
+		}
+
+		// 从 broadcaster 环形缓冲区获取所有事件
+		allEvents := broadcaster.RecentEvents(2000)
+
+		// 过滤
+		filtered := make([]*Event, 0, len(allEvents))
+		for _, evt := range allEvents {
+			if filter.matchFilter(evt) {
+				filtered = append(filtered, evt)
+			}
+		}
+
+		total := len(filtered)
+
+		// 分页
+		if filter.Offset >= total {
+			filtered = nil
+		} else {
+			end := filter.Offset + filter.Limit
+			if end > total {
+				end = total
+			}
+			filtered = filtered[filter.Offset:end]
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"total":   total,
+			"limit":   filter.Limit,
+			"offset":  filter.Offset,
+			"results": filtered,
+		})
+	})
+
+	// 脚本列表（供前端过滤下拉使用）
+	engine.GET("/api/scripts", func(c *gin.Context) {
+		scripts := manager.List()
+		type scriptInfo struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Enabled bool   `json:"enabled"`
+		}
+		result := make([]scriptInfo, 0, len(scripts))
+		for _, s := range scripts {
+			result = append(result, scriptInfo{
+				ID:      s.ID,
+				Name:    s.Name,
+				Enabled: s.Enabled,
+			})
+		}
+		c.JSON(http.StatusOK, gin.H{"scripts": result})
 	})
 
 	log.Printf("[WebUI] Registered at /ui/ (SSE at /api/events)")
