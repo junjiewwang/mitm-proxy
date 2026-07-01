@@ -511,23 +511,6 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .hl-number { color: #79c0ff; }
 .hl-keyword { color: var(--purple); }
 
-/* ========== Hosts ========== */
-.hosts-table-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
-.hosts-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--font-mono); }
-.hosts-table th { padding: 6px 8px; text-align: left; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px; font-weight: 500; border-bottom: 1px solid var(--border); }
-.hosts-table td { padding: 4px 8px; border-bottom: 1px solid var(--border-light); }
-.hosts-table tr:hover td { background: var(--bg-hover); }
-.host-cell { color: var(--text-primary); }
-.host-cell:nth-child(2) { color: var(--green); }
-.hosts-add-row { display: flex; gap: 6px; padding: 8px 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); align-items: center; }
-.hosts-add-row input {
-  padding: 5px 8px; background: var(--bg-primary); border: 1px solid var(--border);
-  color: var(--text-primary); border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font-mono);
-}
-.hosts-add-row input:first-child { width: 160px; }
-.hosts-add-row input:nth-child(2) { flex: 1; }
-.hosts-add-row input:focus { border-color: var(--accent); outline: none; }
-
 /* ========== Diagnostics ========== */
 .diag-header { display: flex; align-items: center; gap: 12px; margin: 12px 0 8px; }
 .diag-header .section-title { margin: 0; }
