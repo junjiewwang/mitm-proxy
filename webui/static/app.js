@@ -155,7 +155,6 @@
         this.classList.add('active');
         $('#tab-' + target).classList.add('active');
         if (target === 'status') { refreshStatus(); refreshDiagnostics(); }
-        if (target === 'hosts') loadHosts();
         if (target === 'debug') initDebugTab();
       });
     });
@@ -637,57 +636,6 @@
     });
   }
 
-  // ========== Hosts Tab ==========
-  async function loadHosts() {
-    try {
-      const resp = await fetch('/api/hosts');
-      const data = await resp.json();
-      const ta = $('#hostsTextarea');
-      if (ta) {
-        ta.value = data.content || '';
-        updateHostsLineNumbers();
-      }
-    } catch (e) {}
-  }
-
-  async function saveHosts() {
-    const content = $('#hostsTextarea').value;
-    try {
-      const resp = await fetch('/api/hosts', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
-      });
-      if (!resp.ok) throw new Error('Save failed');
-      toast('Hosts saved', 'success');
-    } catch (e) { toast('Save hosts: ' + e.message, 'error'); }
-  }
-
-  function updateHostsLineNumbers() {
-    const lines = ($('#hostsTextarea').value || '').split('\n').length;
-    let nums = '';
-    for (let i = 1; i <= lines; i++) nums += i + '\n';
-    const ln = $('#hostsLineNumbers');
-    if (ln) ln.textContent = nums;
-  }
-
-  function initHostsEditor() {
-    const ta = $('#hostsTextarea');
-    if (!ta) return;
-    ta.addEventListener('input', updateHostsLineNumbers);
-    ta.addEventListener('scroll', () => { const ln = $('#hostsLineNumbers'); if (ln) ln.scrollTop = ta.scrollTop; });
-    ta.addEventListener('keydown', function(e) {
-      if (e.key === 'Tab') { e.preventDefault(); /* basic tab insert */ }
-    });
-    document.addEventListener('keydown', function(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        const hostsTab = $('#tab-hosts');
-        if (hostsTab && hostsTab.classList.contains('active')) { e.preventDefault(); saveHosts(); }
-      }
-    });
-  }
-
-  // ========== Diagnostics ==========
   function initDiagTabs() {
     $$('.diag-tab').forEach(tab => {
       tab.addEventListener('click', function () {
@@ -841,10 +789,7 @@
     setInterval(() => { if ($('#tab-status').classList.contains('active')) { refreshStatus(); refreshDiagnostics(); } }, 5000);
     const btnDiag = $('#btnRefreshDiag');
     if (btnDiag) btnDiag.addEventListener('click', refreshDiagnostics);
-    const btnSaveHosts = $('#btnSaveHosts');
-    if (btnSaveHosts) btnSaveHosts.addEventListener('click', saveHosts);
     initDiagTabs();
-    initHostsEditor();
     refreshDiagnostics();
     refreshStatus();
   }

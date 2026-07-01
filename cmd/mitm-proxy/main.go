@@ -219,14 +219,6 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// hosts 文件管理 API
-	if cfg.Proxy.HostsFile != "" {
-		hostsPath := cfg.Proxy.HostsFile
-		registerHostsAPI(ginEngine, hostsPath, func() error {
-			return loadHostsFile(hostsPath, cfg.Proxy.UpstreamMap)
-		})
-	}
-
 	// 规则管理 REST API
 	registerRuleAPI(ginEngine, ruleManager)
 
