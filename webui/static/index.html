@@ -28,6 +28,7 @@
 
   <nav class="tabs">
     <button class="tab active" data-tab="rules">📋 Rules</button>
+    <button class="tab" data-tab="hosts">🌐 Hosts</button>
     <button class="tab" data-tab="debug">🐞 Debug</button>
     <button class="tab" data-tab="logs">📡 Live Logs</button>
     <button class="tab" data-tab="status">📊 Status</button>
@@ -69,6 +70,20 @@
           </div>
           <div class="validation-bar" id="validationBar" style="display:none"></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ Hosts Tab ============ -->
+  <section id="tab-hosts" class="tab-content">
+    <div class="toolbar">
+      <div class="toolbar-spacer"></div>
+      <button class="btn btn-sm btn-primary" id="btnSaveHosts">💾 Save</button>
+    </div>
+    <div class="editor-body" style="flex:1;overflow:hidden">
+      <div class="editor-container" style="height:100%">
+        <div class="line-numbers" id="hostsLineNumbers"></div>
+        <textarea id="hostsTextarea" spellcheck="false" wrap="off" placeholder="Loading hosts.txt..."></textarea>
       </div>
     </div>
   </section>
