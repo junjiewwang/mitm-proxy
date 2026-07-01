@@ -202,10 +202,13 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
   text-align: right;
   user-select: none;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.6;
+  font-family: var(--font-mono);
   border-right: 1px solid var(--border-light);
   flex-shrink: 0;
+  white-space: pre;
+  box-sizing: border-box;
 }
 .line-numbers .ln-config { color: var(--yellow); }
 .line-numbers .ln-script { color: var(--accent); }

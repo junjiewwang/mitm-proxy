@@ -357,7 +357,6 @@
   }
 
   function updateHighlightOverlay(text) {
-    // Update line numbers with context coloring
     const lines = text.split('\n');
     const lineNumbers = $('#lineNumbers');
     if (!lineNumbers) return;
@@ -366,16 +365,20 @@
     let numsHtml = '';
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
-      if (!inConfig && !inScript) {
-        if (line.startsWith('@config')) inConfig = true;
-        else if (line.startsWith('@script')) inScript = true;
-      } else if (inConfig && line === '@end') inConfig = false;
-      else if (inScript && line === '@end') inScript = false;
-
+      const openingConfig = !inScript && line.startsWith('@config');
+      const openingScript = !inConfig && line.startsWith('@script');
+      const endConfig = inConfig && line === '@end';
+      const endScript = inScript && line === '@end';
+      // 着色
       let cls = '';
-      if (inConfig) cls = 'ln-config';
-      else if (inScript) cls = 'ln-script';
+      if (inConfig || openingConfig || endConfig) cls = 'ln-config';
+      else if (inScript || openingScript || endScript) cls = 'ln-script';
       numsHtml += '<span class="' + cls + '">' + (i + 1) + '</span>\n';
+      // 切换状态
+      if (openingConfig) inConfig = true;
+      else if (openingScript) inScript = true;
+      else if (endConfig) inConfig = false;
+      else if (endScript) inScript = false;
     }
     lineNumbers.innerHTML = numsHtml;
   }
