@@ -1,7 +1,6 @@
 .vscode/
 .idea/
 !cmd/mitm-proxy/
-mitm-proxy
 mitm-proxy-*
 __debug_bin*
 certs/
