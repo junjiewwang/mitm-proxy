@@ -18,6 +18,11 @@ func getHosts(path string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		content, err := os.ReadFile(path)
 		if err != nil {
+			if os.IsNotExist(err) {
+				// 文件不存在时返回空内容，前端可正常编辑
+				c.JSON(http.StatusOK, gin.H{"content": ""})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "read hosts file: " + err.Error()})
 			return
 		}
@@ -36,6 +41,12 @@ func updateHosts(path string, reloadFn func() error) gin.HandlerFunc {
 		}
 		if err := os.WriteFile(path, []byte(req.Content), 0644); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "write hosts file: " + err.Error()})
+			return
+		}
+		if req.Content == "" {
+			// 清空内容时，清除 engine 中的 hosts
+			if reloadFn != nil { reloadFn() }
+			c.JSON(http.StatusOK, gin.H{"status": "updated"})
 			return
 		}
 		if reloadFn != nil {
