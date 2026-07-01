@@ -373,6 +373,11 @@
       let cls = '';
       if (inConfig || openingConfig || endConfig) cls = 'ln-config';
       else if (inScript || openingScript || endScript) cls = 'ln-script';
+      else if (line === '' || line.startsWith('#')) cls = 'ln-comment';
+      else if (line.startsWith('@intercept')) cls = 'ln-intercept';
+      else if (line.startsWith('@name') || line.startsWith('@priority')) cls = 'ln-directive';
+      else if (line.startsWith('/')) cls = 'ln-regex';
+      else if (isIPLike(line.split(/\s+/)[0])) cls = 'ln-hosts';
       numsHtml += '<span class="' + cls + '">' + (i + 1) + '</span>\n';
       // 切换状态
       if (openingConfig) inConfig = true;

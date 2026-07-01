@@ -212,6 +212,11 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 }
 .line-numbers .ln-config { color: var(--yellow); }
 .line-numbers .ln-script { color: var(--accent); }
+.line-numbers .ln-intercept { color: #f778ba; }
+.line-numbers .ln-directive { color: var(--purple); }
+.line-numbers .ln-regex { color: #79c0ff; }
+.line-numbers .ln-hosts { color: var(--green); }
+.line-numbers .ln-comment { color: var(--text-muted); }
 #editorTextarea {
   flex: 1;
   padding: 8px 12px;
