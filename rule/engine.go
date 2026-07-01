@@ -161,9 +161,11 @@ func (e *RuleEngine) matchRegex(r *http.Request, script *RuleScript, rule *Rule)
 		return nil
 	}
 
-	// 构建匹配字符串：path + query（如果有）
+	// 构建匹配字符串
+	// proxy/exact 规则：只匹配 path（query string 会破坏 $ 锚点）
+	// script/pipeline 规则：需要 query string 匹配参数（如 serviceType=apm）
 	matchStr := r.URL.Path
-	if r.URL.RawQuery != "" {
+	if (rule.Type == RuleTypeScript || rule.Type == RuleTypePipeline) && r.URL.RawQuery != "" {
 		matchStr = r.URL.Path + "?" + r.URL.RawQuery
 	}
 

@@ -60,6 +60,27 @@ func NewRuleManager(cfg ManagerConfig, engine *RuleEngine) *RuleManager {
 	return m
 }
 
+// disabledMarkerPath 返回禁用标记文件路径：{dir}/.{id}.disabled
+func (m *RuleManager) disabledMarkerPath(id string) string {
+	return filepath.Join(m.dir, "."+id+".disabled")
+}
+
+// isDisabledPersisted 检查是否有持久化的禁用标记
+func (m *RuleManager) isDisabledPersisted(id string) bool {
+	_, err := os.Stat(m.disabledMarkerPath(id))
+	return err == nil
+}
+
+// persistDisabled 持久化禁用状态
+func (m *RuleManager) persistDisabled(id string, disabled bool) {
+	marker := m.disabledMarkerPath(id)
+	if disabled {
+		os.WriteFile(marker, []byte("1"), 0644)
+	} else {
+		os.Remove(marker)
+	}
+}
+
 // LoadAll 加载目录下所有 .rules 文件
 func (m *RuleManager) LoadAll() error {
 	// 确保目录存在
@@ -87,6 +108,11 @@ func (m *RuleManager) LoadAll() error {
 			continue
 		}
 		m.scripts[script.ID] = script
+		// 检查持久化的禁用状态
+		if m.isDisabledPersisted(script.ID) {
+			script.Enabled = false
+			log.Printf("[RuleManager] Loaded %s (disabled via persisted marker)", script.ID)
+		}
 		m.preCompileScripts(script)
 		loaded++
 		if len(script.ParseErrors) > 0 {
@@ -244,7 +270,9 @@ func (m *RuleManager) Delete(id string) error {
 		return fmt.Errorf("script not found: %s", id)
 	}
 
-	// 删除文件
+	// 删除标记文件（如果有）
+	os.Remove(m.disabledMarkerPath(id))
+	// 删除 rules 文件
 	if err := os.Remove(script.FilePath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove rule file: %w", err)
 	}
@@ -273,6 +301,7 @@ func (m *RuleManager) Enable(id string) error {
 	}
 
 	script.Enabled = true
+	m.persistDisabled(id, false)
 	m.compileToEngine()
 
 	log.Printf("[RuleManager] Enabled script: %s", id)
@@ -294,6 +323,7 @@ func (m *RuleManager) Disable(id string) error {
 	}
 
 	script.Enabled = false
+	m.persistDisabled(id, true)
 	m.compileToEngine()
 
 	log.Printf("[RuleManager] Disabled script: %s", id)
@@ -458,6 +488,7 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 	for _, id := range toDelete {
 		delete(m.scripts, id)
 		delete(modTimes, id)
+		os.Remove(m.disabledMarkerPath(id)) // 清理禁用标记
 		log.Printf("[RuleManager] Hot reload: removed deleted script %s", id)
 		changed = true
 	}

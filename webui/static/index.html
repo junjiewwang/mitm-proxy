@@ -169,20 +169,31 @@
       <div class="stat-card"><div class="stat-label">Total Hits</div><div class="stat-value stat-ok" id="statHits">--</div></div>
     </div>
 
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-      <h3 class="section-title" style="margin:0">🔍 代理匹配诊断</h3>
+    <div class="diag-header">
+      <h3 class="section-title">🔍 代理匹配诊断</h3>
       <button class="btn btn-sm" id="btnRefreshDiag">↻ Refresh</button>
       <span class="count" id="diagMatchCount">0 matches</span>
     </div>
 
     <div class="diag-script-cards" id="diagScriptCards"></div>
 
-    <div class="panel" style="flex:1;overflow:auto;margin-top:8px">
+    <div class="diag-tabs">
+      <button class="diag-tab active" data-tab="proxy">Proxy 代理</button>
+      <button class="diag-tab" data-tab="script">Script 脚本</button>
+    </div>
+
+    <div class="panel diag-panel">
       <table class="data-table diag-table">
         <thead><tr>
-          <th>Time</th><th>Method</th><th>Source URL</th><th>→ Target</th><th>Script</th><th>Status</th><th>Lat</th>
+          <th style="width:90px">Time</th>
+          <th style="width:60px">Method</th>
+          <th>Source URL</th>
+          <th style="width:200px">→ Target</th>
+          <th style="width:140px">Script</th>
+          <th style="width:60px">Status</th>
+          <th style="width:70px">Lat</th>
         </tr></thead>
-        <tbody id="diagMatchBody"><tr><td colspan="7" style="color:var(--text-muted);text-align:center">Loading...</td></tr></tbody>
+        <tbody id="diagMatchBody"><tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:20px">Loading...</td></tr></tbody>
       </table>
     </div>
 

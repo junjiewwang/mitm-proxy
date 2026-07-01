@@ -579,7 +579,7 @@
     const cardsEl = $('#diagScriptCards');
     if (!cardsEl) { console.warn('diagScriptCards not found'); return; }
     cardsEl.innerHTML = '';
-    (diag.scripts || []).forEach(s => {
+    (diag.scripts || []).sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id)).forEach(s => {
       const card = document.createElement('div');
       card.className = 'diag-script-card ' + (s.enabled ? 'enabled' : 'disabled');
       card.innerHTML = '<div class="sc-name">' + (s.enabled ? '🟢 ' : '🔴 ') + escapeHtml(s.name || s.id) + '</div>' +
@@ -589,32 +589,60 @@
       cardsEl.appendChild(card);
     });
 
-    // Summary
-    const s = diag.summary || {};
+    // Tab counts
     const proxyCount = (diag.proxy_events || []).length;
     const scriptCount = (diag.script_events || []).length;
-    $('#diagMatchCount').textContent = proxyCount + ' proxy + ' + scriptCount + ' script';
+    const totalCount = proxyCount + scriptCount;
+    $('#diagMatchCount').textContent = totalCount + ' total (' + proxyCount + ' proxy + ' + scriptCount + ' script)';
+    // Update tab labels
+    $$('.diag-tab').forEach(tab => {
+      const t = tab.dataset.tab;
+      const n = t === 'proxy' ? proxyCount : t === 'script' ? scriptCount : 0;
+      const base = t === 'proxy' ? 'Proxy 代理' : 'Script 脚本';
+      tab.textContent = base + ' (' + n + ')';
+    });
 
-    // Match table — 显示 proxy 类事件（CDN 静态资源等）
+    renderMatchTable();
+  }
+
+  function renderMatchTable() {
     const tbody = $('#diagMatchBody');
+    if (!tbody) return;
     tbody.innerHTML = '';
-    const proxyEvents = (diag.proxy_events || []).reverse();
-    if (proxyEvents.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="diag-empty">No proxy matches yet (静态资源 / 路径代理)。Make a request to see results.</td></tr>';
-      return;
-    }
-    proxyEvents.forEach(m => {
-      const tr = document.createElement('tr');
-      const statCls = m.status < 300 ? 'stat-ok' : 'stat-error';
-      tr.innerHTML =
-        '<td>' + fmtTime(m.time) + '</td>' +
-        '<td>' + escapeHtml(m.method || '--') + '</td>' +
-        '<td title="' + escapeHtml(m.url || '') + '">' + escapeHtml(truncate(m.url || '', 40)) + '</td>' +
-        '<td class="diag-target" title="' + escapeHtml(m.target || '') + '">→ ' + escapeHtml(truncate(m.target || '', 30)) + '</td>' +
-        '<td>' + escapeHtml(m.script || '--') + '</td>' +
-        '<td class="' + statCls + '">' + (m.status || '--') + '</td>' +
-        '<td>' + fmtLatency(m.latency_ms) + '</td>';
-      tbody.appendChild(tr);
+
+    const activeTab = document.querySelector('.diag-tab.active');
+    const tab = activeTab ? activeTab.dataset.tab : 'proxy';
+    fetch('/api/diagnostics').then(r => r.json()).then(diag => {
+      const events = tab === 'proxy' ? (diag.proxy_events || []).reverse()
+                                     : (diag.script_events || []).reverse();
+      if (events.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="diag-empty">No ' + tab + ' matches yet</td></tr>';
+        return;
+      }
+      events.forEach(m => {
+        const tr = document.createElement('tr');
+        const statCls = (m.status >= 200 && m.status < 400) ? 'stat-ok' : 'stat-error';
+        // 显示完整 URL，target 也完整
+        tr.innerHTML =
+          '<td class="time-cell">' + fmtTime(m.time) + '</td>' +
+          '<td>' + escapeHtml(m.method || '--') + '</td>' +
+          '<td class="url-cell" title="' + escapeHtml(m.url || '') + '">' + escapeHtml(m.url || '--') + '</td>' +
+          '<td class="target-cell" title="' + escapeHtml(m.target || '') + '">' + escapeHtml(m.target || '--') + '</td>' +
+          '<td>' + escapeHtml(m.script || '--') + '</td>' +
+          '<td class="' + statCls + '">' + (m.status || '--') + (m.error ? ' <span class="diag-target">err</span>' : '') + '</td>' +
+          '<td>' + fmtLatency(m.latency_ms) + '</td>';
+        tbody.appendChild(tr);
+      });
+    });
+  }
+
+  function initDiagTabs() {
+    $$('.diag-tab').forEach(tab => {
+      tab.addEventListener('click', function () {
+        $$('.diag-tab').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+        renderMatchTable();
+      });
     });
   }
 
@@ -761,6 +789,7 @@
     setInterval(() => { if ($('#tab-status').classList.contains('active')) { refreshStatus(); refreshDiagnostics(); } }, 5000);
     const btnDiag = $('#btnRefreshDiag');
     if (btnDiag) btnDiag.addEventListener('click', refreshDiagnostics);
+    initDiagTabs();
     refreshDiagnostics();
     refreshStatus();
   }

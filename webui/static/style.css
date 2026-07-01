@@ -512,6 +512,29 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .hl-keyword { color: var(--purple); }
 
 /* ========== Diagnostics ========== */
+.diag-header { display: flex; align-items: center; gap: 12px; margin: 12px 0 8px; }
+.diag-header .section-title { margin: 0; }
+.diag-header .count { margin-left: auto; }
+
+.diag-tabs { display: flex; gap: 4px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.diag-tab {
+  padding: 6px 14px; background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  font-size: 12px; color: var(--text-secondary); cursor: pointer;
+}
+.diag-tab.active { background: var(--bg-secondary); color: var(--accent); border-color: var(--accent); }
+.diag-tab:hover:not(.active) { color: var(--text-primary); }
+
+.diag-panel { flex: 1; overflow: auto; }
+.diag-table { font-size: 11px; }
+.diag-table th { font-size: 10px; white-space: nowrap; padding: 4px 6px; }
+.diag-table td { font-family: var(--font-mono); font-size: 11px; padding: 3px 6px; max-width: none; }
+.diag-table .url-cell { color: var(--text-primary); word-break: break-all; }
+.diag-table .target-cell { color: var(--green); word-break: break-all; }
+.diag-table .time-cell { color: var(--text-muted); font-size: 10px; }
+.diag-empty { text-align: center; color: var(--text-muted); padding: 20px; }
+
 .diag-script-cards { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .diag-script-card {
   padding: 8px 12px; background: var(--bg-secondary);
