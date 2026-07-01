@@ -638,90 +638,121 @@
   }
 
   // ========== Hosts Tab ==========
+  let hostsEntries = [];
   async function loadHosts() {
     try {
       const resp = await fetch('/api/hosts');
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        toast('Load hosts failed: ' + (err.error || resp.status), 'error');
-        return;
-      }
+      if (!resp.ok) { const err = await resp.json().catch(() => ({})); toast('Load hosts: ' + (err.error || resp.status), 'error'); return; }
       const data = await resp.json();
-      const ta = $('#hostsTextarea');
-      if (ta) {
-        ta.value = data.content || '';
-        ta.placeholder = '# IP domain1 domain2 (Whistle 格式)\n# 10.0.0.1 console.example.com';
-        updateHostsLineNumbers();
+      hostsEntries = parseHostsEntries(data.content || '');
+      renderHostsTable();
+    } catch (e) { toast('Load hosts failed: ' + e.message, 'error'); }
+  }
+
+  function parseHostsEntries(content) {
+    const entries = [];
+    const lines = content.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const disabled = trimmed.startsWith('#');
+      const clean = disabled ? trimmed.substring(1).trim() : trimmed;
+      const parts = clean.split(/\s+/);
+      if (parts.length >= 2 && isIPLike(parts[0])) {
+        entries.push({ ip: parts[0], domains: parts.slice(1), enabled: !disabled });
       }
-    } catch (e) {
-      toast('Load hosts failed: ' + e.message, 'error');
     }
+    return entries;
+  }
+
+  function isIPLike(s) {
+    if (!s) return false;
+    if (s[0] >= '0' && s[0] <= '9' && s.includes('.')) return true;
+    if (s.includes(':') && !s.includes('/')) return true;
+    return false;
+  }
+
+  function hostsToContent() {
+    let lines = [];
+    for (const e of hostsEntries) {
+      const prefix = e.enabled ? '' : '# ';
+      lines.push(prefix + e.ip + ' ' + e.domains.join(' '));
+    }
+    return lines.join('\n') + '\n';
   }
 
   async function saveHosts() {
-    const content = $('#hostsTextarea').value;
     try {
+      const content = hostsToContent();
       const resp = await fetch('/api/hosts', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
       });
-      if (!resp.ok) throw new Error('Save failed');
+      if (!resp.ok) { const err = await resp.json(); throw new Error(err.error || 'Save failed'); }
       toast('Hosts saved', 'success');
     } catch (e) { toast('Save hosts: ' + e.message, 'error'); }
   }
 
-  function updateHostsLineNumbers() {
-    const lines = ($('#hostsTextarea').value || '').split('\n').length;
-    let nums = '';
-    for (let i = 1; i <= lines; i++) nums += i + '\n';
-    const ln = $('#hostsLineNumbers');
-    if (ln) ln.textContent = nums;
+  function renderHostsTable() {
+    const tbody = $('#hostsBody');
+    const empty = $('#hostsEmpty');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    const enabledCount = hostsEntries.filter(e => e.enabled).length;
+    $('#hostsCount').textContent = enabledCount + '/' + hostsEntries.length + ' active';
+
+    if (hostsEntries.length === 0) { empty.style.display = ''; return; }
+    empty.style.display = 'none';
+
+    hostsEntries.forEach((e, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><span class="toggle ' + (e.enabled ? 'on' : '') + '" data-idx="' + i + '" data-action="toggleHost"></span></td>' +
+        '<td class="host-cell">' + escapeHtml(e.ip) + '</td>' +
+        '<td class="host-cell">' + escapeHtml(e.domains.join(' ')) + '</td>' +
+        '<td><button class="btn-icon" data-idx="' + i + '" data-action="delHost" title="Delete">✕</button></td>';
+      tbody.appendChild(tr);
+    });
+
+    tbody.querySelectorAll('[data-action]').forEach(el => {
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        const idx = parseInt(this.dataset.idx);
+        const action = this.dataset.action;
+        if (action === 'toggleHost') {
+          hostsEntries[idx].enabled = !hostsEntries[idx].enabled;
+          renderHostsTable();
+        } else if (action === 'delHost') {
+          hostsEntries.splice(idx, 1);
+          renderHostsTable();
+        }
+      });
+    });
+  }
+
+  function addHostEntry() {
+    const ip = $('#hostAddIP').value.trim();
+    const domains = $('#hostAddDomains').value.trim();
+    if (!ip || !domains) { toast('IP and domains required', 'error'); return; }
+    hostsEntries.push({ ip, domains: domains.split(/\s+/), enabled: true });
+    $('#hostAddIP').value = '';
+    $('#hostAddDomains').value = '';
+    $('#hostsAddRow').style.display = 'none';
+    renderHostsTable();
   }
 
   function initHostsEditor() {
-    const ta = $('#hostsTextarea');
-    if (!ta) return;
-    ta.addEventListener('input', updateHostsLineNumbers);
-    ta.addEventListener('scroll', () => { const ln = $('#hostsLineNumbers'); if (ln) ln.scrollTop = ta.scrollTop; });
-    ta.addEventListener('keydown', function(e) {
-      if (e.key === 'Tab') { e.preventDefault(); /* basic tab insert */ }
-    });
+    $('#btnAddHost').addEventListener('click', () => { $('#hostsAddRow').style.display = 'flex'; $('#hostAddIP').focus(); });
+    $('#btnHostAddConfirm').addEventListener('click', addHostEntry);
+    $('#btnHostAddCancel').addEventListener('click', () => { $('#hostsAddRow').style.display = 'none'; });
+    $('#btnSaveHosts').addEventListener('click', saveHosts);
     document.addEventListener('keydown', function(e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         const hostsTab = $('#tab-hosts');
         if (hostsTab && hostsTab.classList.contains('active')) { e.preventDefault(); saveHosts(); }
       }
     });
-  }
-
-  // ========== Proxy Toggle (Pause/Resume) ==========
-  async function refreshProxyStatus() {
-    try {
-      const r = await fetch('/api/proxy/status');
-      if (!r.ok) return;
-      const d = await r.json();
-      const btn = $('#btnProxyToggle');
-      if (btn) {
-        btn.textContent = d.paused ? '▶ Resume' : '⏸ Pause';
-        btn.classList.toggle('btn-danger', d.paused);
-      }
-    } catch (e) {}
-  }
-
-  function initProxyToggle() {
-    const btn = $('#btnProxyToggle');
-    if (!btn) return;
-    btn.addEventListener('click', async () => {
-      const r = await fetch('/api/proxy/status');
-      if (!r.ok) return;
-      const d = await r.json();
-      const endpoint = d.paused ? '/api/proxy/resume' : '/api/proxy/pause';
-      await fetch(endpoint, { method: 'POST' });
-      refreshProxyStatus();
-      toast(d.paused ? 'Proxy resumed' : 'Proxy paused', 'info');
-    });
-    refreshProxyStatus();
   }
 
   // ========== Diagnostics ==========
@@ -878,11 +909,8 @@
     setInterval(() => { if ($('#tab-status').classList.contains('active')) { refreshStatus(); refreshDiagnostics(); } }, 5000);
     const btnDiag = $('#btnRefreshDiag');
     if (btnDiag) btnDiag.addEventListener('click', refreshDiagnostics);
-    const btnSaveHosts = $('#btnSaveHosts');
-    if (btnSaveHosts) btnSaveHosts.addEventListener('click', saveHosts);
     initDiagTabs();
     initHostsEditor();
-    initProxyToggle();
     refreshDiagnostics();
     refreshStatus();
   }
