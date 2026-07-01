@@ -70,9 +70,42 @@ help:
 	@echo "Available targets:"
 	@echo "  build       - Build binary for current platform"
 	@echo "  build-all   - Cross-compile for linux/amd64 + darwin/arm64"
+	@echo "  run         - Run proxy directly"
 	@echo "  test        - Run all tests with race detector"
 	@echo "  bench       - Run benchmarks (rule matching, JS scripts)"
 	@echo "  vet         - Run go vet"
+	@echo "  lint        - Full lint (build + vet + sensitive scan)"
+	@echo "  clean       - Remove build artifacts"
+	@echo "  release     - Lint + test + build-all"
+	@echo "  install-ca  - Install CA cert into system trust store"
+	@echo ""
+	@echo "Quick start:"
+	@echo "  make install-ca  # First time: install & trust CA certificate"
+	@echo "  make run          # Start proxy"
+
+# === CA 证书安装 ===
+install-ca:
+	@if [ ! -f certs/ca.crt ]; then \
+		echo "No CA cert found, generating..."; \
+		rm -rf certs/ 2>/dev/null; \
+		go run $(MAIN_PATH) & \
+		TMP_PID=$$!; \
+		sleep 2; \
+		kill $$TMP_PID 2>/dev/null; \
+		wait $$TMP_PID 2>/dev/null; \
+	fi
+	@echo "Installing CA certificate..."
+	@case $$(uname) in \
+		Darwin) \
+			sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain certs/ca.crt; \
+			echo "✅ CA installed (Chrome + Firefox on macOS)"; \
+			;; \
+		Linux) \
+			sudo cp certs/ca.crt /usr/local/share/ca-certificates/mitm-proxy.crt 2>/dev/null && sudo update-ca-certificates 2>/dev/null; \
+			echo "✅ CA installed (system, Chrome). Firefox needs manual import: about:preferences#privacy → Certificates → View → Import certs/ca.crt"; \
+			;; \
+		*) echo "Unsupported OS, manually import certs/ca.crt into your browser";; \
+	esac
 	@echo "  lint        - Full lint (build + vet + sensitive scan)"
 	@echo "  clean       - Remove build artifacts"
 	@echo "  release     - Lint + test + build-all"
