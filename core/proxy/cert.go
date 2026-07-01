@@ -87,18 +87,21 @@ func generateCA(certDir, certPath, keyPath string) (*CACert, error) {
 	}
 
 	// 生成 CA 证书
+	subjectKeyId, _ := x509.MarshalPKIXPublicKey(&caKey.PublicKey)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			Organization: []string{"YunAPI Proxy CA"},
-			CommonName:   "YunAPI Proxy Root CA",
+			Organization: []string{"mitm-proxy CA"},
+			CommonName:   "mitm-proxy Root CA",
 		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour), // 10 年
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		NotBefore:             time.Now().Add(-24 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
+		MaxPathLenZero:        false,
 		MaxPathLen:            1,
+		SubjectKeyId:          subjectKeyId,
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &caKey.PublicKey, caKey)
@@ -151,19 +154,22 @@ func (ca *CACert) GenerateCert(hostname string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("generate key: %w", err)
 	}
 
+	subjectKeyId, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(time.Now().UnixNano()),
 		Subject: pkix.Name{
-			Organization: []string{"YunAPI Proxy"},
+			Organization: []string{"mitm-proxy"},
 			CommonName:   hostname,
 		},
 		DNSNames:  []string{hostname},
-		NotBefore: time.Now().Add(-1 * time.Hour),
+		NotBefore: time.Now().Add(-24 * time.Hour),
 		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:  x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{
 			x509.ExtKeyUsageServerAuth,
 		},
+		SubjectKeyId:   subjectKeyId,
+		AuthorityKeyId: ca.caCert.SubjectKeyId,
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, template, ca.caCert, &key.PublicKey, ca.caKey)
