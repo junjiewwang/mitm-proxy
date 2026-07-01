@@ -229,10 +229,9 @@ func main() {
 			if err != nil {
 				return err
 			}
+			// 即时热更新到 RuleEngine
 			ruleEngine.SetSystemHosts(hosts)
-			if len(hosts) > 0 {
-				log.Printf("[Config] Hot-reloaded %d host mappings", len(hosts))
-			}
+			log.Printf("[Config] Hot-reloaded %d host mappings", len(hosts))
 			return nil
 		})
 	}
