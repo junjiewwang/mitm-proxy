@@ -512,6 +512,8 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .hl-keyword { color: var(--purple); }
 
 /* ========== Hosts ========== */
+#hostsEditorView .editor-container { border: 1px solid var(--border); border-radius: var(--radius); }
+#hostsEditorView #hostsTextarea { height: 100%; }
 .hosts-table-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 .hosts-table { width: 100%; border-collapse: collapse; font-size: 12px; font-family: var(--font-mono); }
 .hosts-table th { padding: 6px 8px; text-align: left; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px; font-weight: 500; border-bottom: 1px solid var(--border); }

@@ -742,15 +742,62 @@
     renderHostsTable();
   }
 
+  // Hosts Text Editor helpers
+  function syncHostsToEditor() {
+    const ta = $('#hostsTextarea');
+    if (ta) { ta.value = hostsToContent(); updateHostsLineNums(); }
+  }
+
+  function syncEditorToHosts() {
+    const ta = $('#hostsTextarea');
+    if (ta) { hostsEntries = parseHostsEntries(ta.value || ''); renderHostsTable(); }
+  }
+
+  function updateHostsLineNums() {
+    const ta = $('#hostsTextarea');
+    if (!ta) return;
+    const lines = ta.value.split('\n').length;
+    let nums = '';
+    for (let i = 1; i <= lines; i++) nums += i + '\n';
+    const ln = $('#hostsLineNumbers');
+    if (ln) ln.textContent = nums;
+  }
+
+  let hostsViewMode = 'table';
   function initHostsEditor() {
     $('#btnAddHost').addEventListener('click', () => { $('#hostsAddRow').style.display = 'flex'; $('#hostAddIP').focus(); });
     $('#btnHostAddConfirm').addEventListener('click', addHostEntry);
     $('#btnHostAddCancel').addEventListener('click', () => { $('#hostsAddRow').style.display = 'none'; });
-    $('#btnSaveHosts').addEventListener('click', saveHosts);
+    $('#btnSaveHosts').addEventListener('click', () => { if (hostsViewMode === 'text') syncEditorToHosts(); saveHosts(); });
+
+    // Text editor view toggle
+    $('#btnHostsEditToggle').addEventListener('click', () => {
+      if (hostsViewMode === 'table') {
+        syncHostsToEditor();
+        $('#hostsTableView').style.display = 'none';
+        $('#hostsEditorView').style.display = 'flex';
+        $('#btnHostsEditToggle').textContent = '📋 Table';
+        hostsViewMode = 'text';
+      } else {
+        syncEditorToHosts();
+        $('#hostsEditorView').style.display = 'none';
+        $('#hostsTableView').style.display = '';
+        $('#btnHostsEditToggle').textContent = '📝 Edit';
+        hostsViewMode = 'table';
+      }
+    });
+
+    // Editor line numbers scroll sync
+    const ta = $('#hostsTextarea');
+    if (ta) {
+      ta.addEventListener('input', updateHostsLineNums);
+      ta.addEventListener('scroll', () => { const ln = $('#hostsLineNumbers'); if (ln) ln.scrollTop = ta.scrollTop; });
+    }
+
     document.addEventListener('keydown', function(e) {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         const hostsTab = $('#tab-hosts');
-        if (hostsTab && hostsTab.classList.contains('active')) { e.preventDefault(); saveHosts(); }
+        if (hostsTab && hostsTab.classList.contains('active')) { e.preventDefault(); if (hostsViewMode === 'text') syncEditorToHosts(); saveHosts(); }
       }
     });
   }
