@@ -17,9 +17,8 @@ import (
 
 // ProxyConfig 正向代理配置
 type ProxyConfig struct {
-	CertDir          string            // CA 证书目录
-	InterceptDomains []string          // 额外 MITM 拦截域名（回退用）
-	UpstreamMap      map[string]string // 额外 hosts 映射
+	CertDir          string // CA 证书目录
+	InterceptDomains []string          // 额外 MITM 拦截域名（回退用，优先用规则引擎 @intercept）
 }
 
 // ForwardProxy 正向代理服务，支持 CONNECT 隧道和 MITM 拦截
@@ -569,19 +568,13 @@ func (p *ForwardProxy) buildCORSPreflightResponse(r *http.Request) *http.Respons
 	return resp
 }
 
-// getUpstreamAddr 获取上游服务器地址
+// getUpstreamAddr 获取上游服务器地址（通过 UpstreamResolver 统一查询）
 func (p *ForwardProxy) getUpstreamAddr(hostname string) string {
-	// 优先使用注入的规则引擎接口
 	if p.upstreamResolver != nil {
 		if addr, ok := p.upstreamResolver.ResolveUpstream(hostname); ok {
 			return addr
 		}
 	}
-	// 兼容：回退到配置中的 upstream 映射
-	if addr, ok := p.cfg.UpstreamMap[hostname]; ok {
-		return addr
-	}
-	// 默认使用原始域名
 	return hostname + ":443"
 }
 
