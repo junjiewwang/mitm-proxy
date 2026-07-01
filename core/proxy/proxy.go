@@ -164,11 +164,13 @@ func (p *ForwardProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// 判断是否需要 MITM 拦截（只对目标域名做 MITM）
 	if p.shouldIntercept(hostname) {
+		log.Printf("[Proxy] CONNECT MITM: %s", hostname)
 		p.handleMITM(w, r, hostname)
 		return
 	}
 
 	// 不需要拦截的域名，直接透传隧道
+	log.Printf("[Proxy] CONNECT TUNNEL: %s (not in intercept list)", hostname)
 	p.handleTunnel(w, r, host)
 }
 
@@ -424,6 +426,8 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 					respChan <- pendingResponse{seq: seq, resp: resp}
 					return
 				}
+				log.Printf("[Proxy] ▶ NOT MATCHED [seq=%d]: %s %s → forward to upstream",
+					seq, req.Method, req.URL.String())
 			}
 
 			// 未匹配：透传到上游

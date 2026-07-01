@@ -181,7 +181,7 @@ func main() {
 	// ========================================
 	// 创建事件广播器
 	// ========================================
-	eventBroadcaster := webui.NewEventBroadcaster(200)
+	eventBroadcaster := webui.NewEventBroadcaster(2000)
 
 	// ========================================
 	// 创建处理器调度（使用 JS 脚本运行时）
