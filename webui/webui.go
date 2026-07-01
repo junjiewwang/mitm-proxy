@@ -8,11 +8,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
+	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
 )
 
@@ -133,7 +135,7 @@ type StatusProvider interface {
 }
 
 // RegisterRoutes 注册 Web UI 路由
-func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *EventBroadcaster, statusProvider StatusProvider) {
+func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *EventBroadcaster, statusProvider StatusProvider, debugger *script.Debugger) {
 	// 静态资源（embed.FS）
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -221,6 +223,138 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 			"id":      id,
 			"content": string(content),
 		})
+	})
+
+	// JS 脚本调试端点
+	engine.POST("/api/rules/:id/debug", func(c *gin.Context) {
+		if debugger == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "debugger not available"})
+			return
+		}
+
+		id := c.Param("id")
+		var req script.DebugRequest
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		// 获取脚本
+		rs, ok := manager.Get(id)
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{"error": "script not found"})
+			return
+		}
+
+		// 执行规则匹配
+		matched := false
+		engine := manager.GetEngine()
+		if engine != nil && req.Path != "" {
+			// 构建假请求用于规则匹配
+			fakeReq, _ := http.NewRequest(req.Method, req.Path, nil)
+			if fakeReq == nil {
+				fakeReq, _ = http.NewRequest("POST", req.Path, nil)
+			}
+			if fakeReq != nil && fakeReq.URL != nil {
+				if fakeReq.URL.RawQuery == "" && strings.Contains(req.Path, "?") {
+					idx := strings.Index(req.Path, "?")
+					pathPart := req.Path[:idx]
+					queryPart := req.Path[idx+1:]
+					fakeReq.URL.Path = pathPart
+					fakeReq.URL.RawQuery = queryPart
+				}
+				if _, m := engine.Match(fakeReq); m {
+					matched = true
+				}
+			}
+		}
+
+		if !matched {
+			c.JSON(http.StatusOK, gin.H{
+				"steps": []gin.H{
+					{"stage": "rule_match", "matched": false, "output": gin.H{"note": "no rule matched this path"}, "elapsed_ms": 0},
+				},
+				"total_elapsed_ms": 0,
+			})
+			return
+		}
+
+		// 执行调试
+		hasOnReq := rs.Scripts["onRequest"] != ""
+		hasOnResp := rs.Scripts["onResponse"] != ""
+		result := debugger.Execute(req, id, rs.Config, rs.CompiledPrograms, hasOnReq, hasOnResp)
+		c.JSON(http.StatusOK, result)
+	})
+
+	// 诊断端点：一目了然的代理状态 + 静态资源代理验证
+	engine.GET("/api/diagnostics", func(c *gin.Context) {
+		result := make(map[string]interface{})
+
+		// 规则引擎状态
+		scripts := manager.List()
+		enabledCount := 0
+		totalRules := 0
+		totalHits := int64(0)
+		scriptDetails := make([]map[string]interface{}, 0)
+		for _, s := range scripts {
+			if s.Enabled { enabledCount++ }
+			totalRules += len(s.Rules)
+			totalHits += s.Stats.TotalHits
+			scriptDetails = append(scriptDetails, map[string]interface{}{
+				"id":       s.ID,
+				"name":     s.Name,
+				"enabled":  s.Enabled,
+				"priority": s.Priority,
+				"rules":    len(s.Rules),
+				"intercepts": len(s.Intercepts),
+				"has_js":   len(s.Scripts) > 0,
+				"hits":     s.Stats.TotalHits,
+			})
+		}
+		result["scripts"] = scriptDetails
+		result["summary"] = map[string]interface{}{
+			"total_scripts":   len(scripts),
+			"enabled_scripts": enabledCount,
+			"total_rules":     totalRules,
+			"total_hits":      totalHits,
+		}
+
+		// 最近代理匹配事件（从 broadcaster 环形缓冲区取最新 1000 条）
+		// 按 rule_type 分类，避免高频 cgi/capi 淹没低频前端资源事件
+		var proxyEvents, scriptEvents []*Event
+		for _, evt := range broadcaster.RecentEvents(1000) {
+			if evt.Type != "match" { continue }
+			if evt.RuleType == "script" {
+				scriptEvents = append(scriptEvents, evt)
+			} else {
+				proxyEvents = append(proxyEvents, evt)
+			}
+		}
+		// 各取最新 20 条
+		toResult := func(events []*Event) []map[string]interface{} {
+			if len(events) > 20 { events = events[len(events)-20:] }
+			out := make([]map[string]interface{}, 0, len(events))
+			for _, evt := range events {
+				m := map[string]interface{}{
+					"time":       evt.Time,
+					"method":     evt.Method,
+					"url":        evt.URL,
+					"script":     evt.Script,
+					"target":     evt.Target,
+					"rule_type":  evt.RuleType,
+					"status":     evt.Status,
+					"latency_ms": evt.LatencyMs,
+				}
+				if evt.Error != "" { m["error"] = evt.Error }
+				out = append(out, m)
+			}
+			return out
+		}
+		result["proxy_events"] = toResult(proxyEvents)
+		result["script_events"] = toResult(scriptEvents)
+		result["recent_matches"] = toResult(append(proxyEvents, scriptEvents...))
+
+		c.JSON(http.StatusOK, result)
 	})
 
 	log.Printf("[WebUI] Registered at /ui/ (SSE at /api/events)")

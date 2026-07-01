@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Parser 规则文件解析器（Whistle 兼容扩展语法）
@@ -34,15 +36,19 @@ func (p *Parser) ParseFile(path string) (*RuleScript, error) {
 func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 	script := &RuleScript{
 		Enabled: true,
+		Scripts: make(map[string]string),
 	}
 	var errors []ParseError
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
+	// 支持超长行（JS 脚本可能单行很长）
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	lineNo := 0
 
 	for scanner.Scan() {
 		lineNo++
-		line := strings.TrimSpace(scanner.Text())
+		rawLine := scanner.Text()
+		line := strings.TrimSpace(rawLine)
 
 		// 空行
 		if line == "" {
@@ -51,6 +57,54 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 
 		// 注释
 		if strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// 多行块指令（@config / @script）
+		if strings.HasPrefix(line, "@config") {
+			configBlock, endLine, err := p.readBlock(scanner, &lineNo, "config")
+			if err != nil {
+				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+				continue
+			}
+			if err := p.parseConfigBlock(script, configBlock); err != nil {
+				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+			}
+			lineNo = endLine // 跳过多行块
+			continue
+		}
+
+		if strings.HasPrefix(line, "@script") {
+			scriptName, isExternal, externalPath := p.parseScriptHeader(line)
+			if isExternal {
+				// @script name file://path — 引用外部 JS 文件
+				extSource, err := os.ReadFile(externalPath)
+				if err != nil {
+					errors = append(errors, ParseError{Line: lineNo, Message: fmt.Sprintf("read external script: %v", err), Raw: line})
+				} else {
+					if script.Scripts == nil {
+						script.Scripts = make(map[string]string)
+					}
+					script.Scripts[scriptName] = string(extSource)
+				}
+				continue
+			}
+
+			scriptBlock, endLine, err := p.readBlock(scanner, &lineNo, "script")
+			if err != nil {
+				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+				continue
+			}
+			if script.Scripts == nil {
+				script.Scripts = make(map[string]string)
+			}
+			script.Scripts[scriptName] = scriptBlock
+			_ = endLine
+			continue
+		}
+
+		// 单独的 @end（无开头匹配的多行块，忽略）
+		if line == "@end" {
 			continue
 		}
 
@@ -83,6 +137,63 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 	}
 
 	return script, errors
+}
+
+// readBlock 读取直到 @end 的多行内容块
+// scanner: 已经定位在 @config/@script 行的下一行
+// lineNo: 当前行号指针
+// blockType: 用于错误消息
+// 返回: 块内容（去掉首尾空白）, @end 所在行号, error
+func (p *Parser) readBlock(scanner *bufio.Scanner, lineNo *int, blockType string) (string, int, error) {
+	var lines []string
+	startLine := *lineNo
+
+	for scanner.Scan() {
+		*lineNo++
+		rawLine := scanner.Text()
+		trimmed := strings.TrimSpace(rawLine)
+
+		if trimmed == "@end" {
+			return strings.Join(lines, "\n"), *lineNo, nil
+		}
+
+		// 保留原始缩进（JS/YAML 缩进敏感）
+		lines = append(lines, rawLine)
+	}
+
+	return "", *lineNo, fmt.Errorf("%s block opened at line %d but never closed (missing @end)", blockType, startLine)
+}
+
+// parseConfigBlock 解析 @config...@end 中的 YAML 内容到 script.Config
+func (p *Parser) parseConfigBlock(script *RuleScript, yamlContent string) error {
+	if yamlContent == "" {
+		script.Config = make(map[string]any)
+		return nil
+	}
+	var config map[string]any
+	if err := yaml.Unmarshal([]byte(yamlContent), &config); err != nil {
+		return fmt.Errorf("parse @config YAML: %w", err)
+	}
+	script.Config = config
+	return nil
+}
+
+// parseScriptHeader 解析 @script 行头，提取脚本名称
+// 支持: @script onRequest, @script onResponse, @script onRequest file://path.js
+func (p *Parser) parseScriptHeader(line string) (scriptName string, isExternal bool, externalPath string) {
+	rest := strings.TrimPrefix(line, "@script")
+	rest = strings.TrimSpace(rest)
+
+	// 检查是否引用外部文件
+	if idx := strings.Index(rest, "file://"); idx >= 0 {
+		scriptName = strings.TrimSpace(rest[:idx])
+		externalPath = strings.TrimSpace(rest[idx+len("file://"):])
+		isExternal = true
+		return
+	}
+
+	scriptName = rest
+	return
 }
 
 // parseDirective 解析 @ 指令
@@ -173,12 +284,17 @@ func (p *Parser) parseRegexRule(line string, lineNo int) (*Rule, error) {
 		Raw:  line,
 	}
 
-	// 判断是 pipeline:// 还是普通代理
-	if strings.HasPrefix(target, "pipeline://") {
+	// 判断 target 协议
+	switch {
+	case strings.HasPrefix(target, "pipeline://"):
 		rule.Type = RuleTypePipeline
 		rule.Pattern = re
 		rule.Adapter = strings.TrimPrefix(target, "pipeline://")
-	} else {
+	case strings.HasPrefix(target, "script://"):
+		rule.Type = RuleTypeScript
+		rule.Pattern = re
+		rule.ScriptRef = strings.TrimPrefix(target, "script://")
+	default:
 		rule.Type = RuleTypeProxy
 		rule.Pattern = re
 		rule.Target = target
@@ -201,9 +317,9 @@ func (p *Parser) parseRegexRule(line string, lineNo int) (*Rule, error) {
 
 // findTargetIndex 从行中定位 target 的起始位置
 // target 必须以空格或制表符为前缀（区分正则内部可能含有的 http://）
-// 支持协议：http://, https://, pipeline://
+// 支持协议：http://, https://, pipeline://, script://
 func (p *Parser) findTargetIndex(line string) int {
-	protocols := []string{"http://", "https://", "pipeline://"}
+	protocols := []string{"http://", "https://", "pipeline://", "script://"}
 
 	// 从右向左搜索，优先匹配最靠右的 target（正则内容在左侧）
 	bestIdx := -1

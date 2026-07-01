@@ -1,8 +1,8 @@
 .vscode/
 .idea/
-yunapi-proxy
-mitm-proxy
+!cmd/mitm-proxy/
 mitm-proxy-*
 __debug_bin*
 certs/
 dist/
+rules

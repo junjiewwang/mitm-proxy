@@ -1,6 +1,10 @@
 package rule
 
-import "time"
+import (
+	"time"
+
+	"github.com/dop251/goja"
+)
 
 // RuleScript 一个规则脚本（对应一个 .rules 文件）
 type RuleScript struct {
@@ -13,6 +17,16 @@ type RuleScript struct {
 	// 解析结果
 	Intercepts []string // @intercept 声明的域名列表
 	Rules      []Rule   // 解析后的规则列表（按文件顺序）
+
+	// V2: 脚本私有配置（@config...@end 段，YAML 格式，框架不解析）
+	Config map[string]any `json:"config,omitempty"`
+
+	// V2: 内嵌 JS 脚本（name → JS 源码），如 onRequest/onResponse
+	Scripts map[string]string `json:"scripts,omitempty"`
+
+	// V2.1: 预编译的 JS 程序（规则加载时编译，运行时直接用）
+	// key 同 Scripts（如 "onRequest"/"onResponse"），由 RuleManager 在加载时填充
+	CompiledPrograms map[string]*goja.Program `json:"-"`
 
 	// 运行时统计
 	Stats       ScriptStats

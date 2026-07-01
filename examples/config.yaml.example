@@ -1,0 +1,20 @@
+# mitm-proxy 框架配置示例
+server:
+  listen: ":8082"
+
+proxy:
+  enable: true
+  listen: ":8081"
+  cert_dir: "certs"
+
+rules:
+  dir: "rules"
+  hot_reload: true
+  watch_interval: 2s
+
+webui:
+  enable: true
+
+debug:
+  enable: true
+  buffer_size: 200

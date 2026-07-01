@@ -1,13 +1,14 @@
 package rule
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 
-	"mitm-proxy/proxy"
+	"mitm-proxy/core/proxy"
 )
 
 // RuleEngine 规则匹配引擎（线程安全，支持热更新）
@@ -72,6 +73,14 @@ func (e *RuleEngine) Compile(scripts []*RuleScript) {
 		}
 	}
 	e.hostsMap = hostsMap
+
+	// 统计日志：方便验证规则更新是否生效
+	totalRules := 0
+	for _, s := range sorted {
+		totalRules += len(s.Rules)
+	}
+	log.Printf("[RuleEngine] Recompiled: %d scripts (%d enabled), %d rules, %d intercepts, %d hosts",
+		len(scripts), len(sorted), totalRules, len(interceptSet), len(hostsMap))
 }
 
 // ShouldIntercept 实现 proxy.InterceptMatcher 接口
@@ -138,7 +147,7 @@ func (e *RuleEngine) Match(r *http.Request) (*proxy.MatchResult, bool) {
 // matchRule 尝试将请求与单条规则匹配
 func (e *RuleEngine) matchRule(r *http.Request, script *RuleScript, rule *Rule) *proxy.MatchResult {
 	switch rule.Type {
-	case RuleTypeProxy, RuleTypePipeline:
+	case RuleTypeProxy, RuleTypePipeline, RuleTypeScript:
 		return e.matchRegex(r, script, rule)
 	case RuleTypeExact:
 		return e.matchExact(r, script, rule)
@@ -179,6 +188,9 @@ func (e *RuleEngine) matchRegex(r *http.Request, script *RuleScript, rule *Rule)
 	case RuleTypePipeline:
 		result.RuleType = proxy.RuleTypePipeline
 		result.Adapter = rule.Adapter
+	case RuleTypeScript:
+		result.RuleType = proxy.RuleTypeScript
+		result.ScriptRef = rule.ScriptRef
 	}
 
 	return result

@@ -9,16 +9,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"mitm-proxy/core/script"
 )
 
 // RuleManager 规则管理器
-// 职责：规则脚本 CRUD + 启停 + 热加载 + 持久化
+// 职责：规则脚本 CRUD + 启停 + 热加载 + 持久化 + JS 预编译
 type RuleManager struct {
 	mu      sync.RWMutex
 	scripts map[string]*RuleScript // ID → Script
 	dir     string                 // 规则文件目录（rules/）
 	engine  *RuleEngine            // 规则变更时通知引擎重编译
 	parser  *Parser
+	loader  *script.Loader // JS 脚本预编译器（nil=跳过预编译）
 
 	// 热加载
 	hotReload     bool
@@ -28,9 +31,10 @@ type RuleManager struct {
 
 // ManagerConfig RuleManager 配置
 type ManagerConfig struct {
-	Dir           string        // 规则文件目录
-	HotReload     bool          // 是否启用热加载
-	WatchInterval time.Duration // 文件监听间隔
+	Dir           string          // 规则文件目录
+	HotReload     bool            // 是否启用热加载
+	WatchInterval time.Duration   // 文件监听间隔
+	ScriptLoader  *script.Loader  // JS 脚本预编译器（可选，nil 表示不预编译）
 }
 
 // NewRuleManager 创建规则管理器
@@ -47,6 +51,7 @@ func NewRuleManager(cfg ManagerConfig, engine *RuleEngine) *RuleManager {
 		dir:           cfg.Dir,
 		engine:        engine,
 		parser:        &Parser{},
+		loader:        cfg.ScriptLoader,
 		hotReload:     cfg.HotReload,
 		watchInterval: cfg.WatchInterval,
 		stopWatch:     make(chan struct{}),
@@ -82,6 +87,7 @@ func (m *RuleManager) LoadAll() error {
 			continue
 		}
 		m.scripts[script.ID] = script
+		m.preCompileScripts(script)
 		loaded++
 		if len(script.ParseErrors) > 0 {
 			log.Printf("[RuleManager] Loaded %s (with %d parse errors, first: %s)", script.ID, len(script.ParseErrors), script.ParseErrors[0].Error())
@@ -185,6 +191,7 @@ func (m *RuleManager) Create(name, content string) (*RuleScript, error) {
 	}
 
 	m.scripts[id] = script
+	m.preCompileScripts(script)
 
 	// 重编译
 	m.compileToEngine()
@@ -209,7 +216,7 @@ func (m *RuleManager) Update(id, content string) error {
 	}
 
 	// 重新解析
-	script, _ := m.parser.ParseContent(content)
+	script, parseErrs := m.parser.ParseContent(content)
 	script.ID = id
 	script.FilePath = old.FilePath
 	script.Enabled = old.Enabled
@@ -217,11 +224,13 @@ func (m *RuleManager) Update(id, content string) error {
 	script.UpdatedAt = time.Now()
 
 	m.scripts[id] = script
+	m.preCompileScripts(script)
 
 	// 重编译
 	m.compileToEngine()
 
-	log.Printf("[RuleManager] Updated script: %s", id)
+	log.Printf("[RuleManager] Updated script: %s (rules: %d→%d, scripts: %d, parse_errors: %d)",
+		id, len(old.Rules), len(script.Rules), len(script.Scripts), len(parseErrs))
 	return nil
 }
 
@@ -309,6 +318,7 @@ func (m *RuleManager) Reload(id string) error {
 	script.Enabled = old.Enabled
 	script.Stats = old.Stats
 	m.scripts[id] = script
+	m.preCompileScripts(script)
 
 	m.compileToEngine()
 
@@ -330,6 +340,7 @@ func (m *RuleManager) ReloadAll() error {
 		script.Enabled = old.Enabled
 		script.Stats = old.Stats
 		m.scripts[id] = script
+		m.preCompileScripts(script)
 	}
 
 	m.compileToEngine()
@@ -362,6 +373,21 @@ func (m *RuleManager) compileToEngine() {
 	m.engine.Compile(scripts)
 }
 
+// preCompileScripts 预编译脚本的 @script 块（调用方需持有 mu 锁）
+// 如果 Loader 未设置或脚本没有 @script 块，则跳过
+func (m *RuleManager) preCompileScripts(s *RuleScript) {
+	if m.loader == nil || len(s.Scripts) == 0 {
+		return
+	}
+	progs, err := m.loader.CompileMulti(s.Scripts)
+	if err != nil {
+		log.Printf("[RuleManager] WARNING: pre-compile %s scripts failed: %v", s.ID, err)
+		return
+	}
+	s.CompiledPrograms = progs
+	log.Printf("[RuleManager] Pre-compiled %d scripts for %s", len(progs), s.ID)
+}
+
 // snapshotModTimes 快照当前所有规则文件的修改时间
 func (m *RuleManager) snapshotModTimes() map[string]time.Time {
 	modTimes := make(map[string]time.Time)
@@ -383,13 +409,21 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 
 	m.mu.RLock()
 	toReload := make([]string, 0)
+	toRecreate := make([]string, 0) // 被删除后又重建的文件（需自动启用）
+	toDelete := make([]string, 0)   // 被删除的文件
 	for id, s := range m.scripts {
 		info, err := os.Stat(s.FilePath)
 		if err != nil {
+			// 文件被删除，标记待移除
+			toDelete = append(toDelete, id)
 			continue
 		}
 		lastMod, ok := modTimes[id]
-		if !ok || info.ModTime().After(lastMod) {
+		if !ok {
+			// 此文件在上次快照时不存在 → 被删除后重建，自动启用
+			toRecreate = append(toRecreate, id)
+			modTimes[id] = info.ModTime()
+		} else if info.ModTime().After(lastMod) {
 			toReload = append(toReload, id)
 			modTimes[id] = info.ModTime()
 		}
@@ -420,6 +454,33 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// 处理被删除的文件
+	for _, id := range toDelete {
+		delete(m.scripts, id)
+		delete(modTimes, id)
+		log.Printf("[RuleManager] Hot reload: removed deleted script %s", id)
+		changed = true
+	}
+
+	// 处理被删除后又重建的文件（自动启用）
+	for _, id := range toRecreate {
+		old, ok := m.scripts[id]
+		if !ok {
+			continue
+		}
+		script, parseErr := m.parser.ParseFile(old.FilePath)
+		if parseErr != nil {
+			log.Printf("[RuleManager] Hot reload: skip recreated %s: %v", id, parseErr)
+			continue
+		}
+		script.Enabled = true // 重建文件，自动启用
+		script.Stats = old.Stats
+		m.scripts[id] = script
+		m.preCompileScripts(script)
+		log.Printf("[RuleManager] Hot reload: recreated script %s (auto-enabled)", id)
+		changed = true
+	}
+
 	for _, item := range toReload {
 		if strings.HasPrefix(item, "new:") {
 			// 新文件
@@ -431,6 +492,7 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 				continue
 			}
 			m.scripts[script.ID] = script
+			m.preCompileScripts(script)
 			log.Printf("[RuleManager] Hot reload: loaded new script %s", script.ID)
 			changed = true
 		} else {
@@ -447,6 +509,7 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 			script.Enabled = old.Enabled
 			script.Stats = old.Stats
 			m.scripts[item] = script
+			m.preCompileScripts(script)
 			log.Printf("[RuleManager] Hot reload: reloaded %s", item)
 			changed = true
 		}

@@ -2,7 +2,7 @@
 
 > 创建时间：2026-06-30  
 > 最后更新：2026-06-30  
-> 状态：方案设计阶段  
+> 状态：✅ 全部 Sprint 完成  
 > 前置：V1 Sprint 1~5 已完成（adapter 插件化 + module 重命名）
 
 ---
@@ -416,9 +416,11 @@ region_map:
 
 ## 四、实施 Sprint 规划
 
-### Sprint V2.1：JS 运行时 + Parser 扩展 + ScriptProcessor
+### Sprint V2.1：JS 运行时 + Parser 扩展 + ScriptProcessor ✅ 已完成
 
 > **目标**：规则脚本支持 `@config`/`@script`/`script://` 语法，JS 脚本可以处理请求。yunapi 业务逻辑从 Go adapter 迁移到 JS 脚本。编译通过 + 功能等价验证。
+>
+> **详细进度**: 见 [docs/sprint6-v2.1-progress.md](sprint6-v2.1-progress.md)
 
 #### 前置依赖
 
@@ -470,9 +472,11 @@ region_map:
 
 ---
 
-### Sprint V2.2：调试面板 + Web UI 增强
+### Sprint V2.2：调试面板 + Web UI 增强 ✅ 已完成
 
 > **目标**：Web UI 支持 JS 脚本在线编辑和调试（手动输入请求 → 分步执行 → 查看结果）。
+>
+> **详细进展**: 语法高亮混合编辑器 + Debug Tab（分步执行 + console 输出）
 
 #### 任务列表
 
@@ -500,9 +504,11 @@ region_map:
 
 ---
 
-### Sprint V2.3：main 包抽取 + core/ 形成框架
+### Sprint V2.3：main 包抽取 + core/ 形成框架 ✅ 已完成
 
 > **目标**：将 main 包中的通用代码抽取到 `core/` 子包，形成可被外部 import 的框架结构。
+>
+> **详细进展**: cmd/mitm-proxy/ + core/proxy/ 成立，外部可 import
 
 #### 任务列表
 
@@ -535,9 +541,11 @@ region_map:
 
 ---
 
-### Sprint V2.4：文档 + 清理 + 开源准备
+### Sprint V2.4：文档 + 清理 + 开源准备 ✅ 已完成
 
 > **目标**：完善文档，清理敏感信息，准备开源发布。
+>
+> **详细进展**: README 更新、JS API 参考文档、示例规则、Makefile/goreleaser 更新、root 旧文件清理、rules/ gitignored
 
 #### 任务列表
 
