@@ -17,15 +17,7 @@ type RuleEngine struct {
 	mu           sync.RWMutex
 	scripts      []*RuleScript       // 按 priority 降序排列
 	interceptSet map[string]bool     // 合并后的 MITM 域名集
-	hostsMap     map[string]string   // 合并后的 hosts 映射（domain → ip:port，来自 .rules）
-	systemHosts  map[string]string   // 系统级 hosts 映射（来自 hosts.txt，热更新即时生效）
-}
-
-// SetSystemHosts 设置系统级 hosts 映射（热更新，即时生效）
-func (e *RuleEngine) SetSystemHosts(hosts map[string]string) {
-	e.mu.Lock()
-	e.systemHosts = hosts
-	e.mu.Unlock()
+	hostsMap     map[string]string   // 合并后的 hosts 映射（domain → ip:port）
 }
 
 // NewRuleEngine 创建规则引擎
@@ -112,16 +104,10 @@ func (e *RuleEngine) ShouldIntercept(hostname string) bool {
 }
 
 // ResolveUpstream 实现 proxy.UpstreamResolver 接口
-// 系统 hosts（hosts.txt）优先级高于规则 hosts（.rules）
 func (e *RuleEngine) ResolveUpstream(hostname string) (string, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// 系统 hosts（来自 hosts.txt，热更新即时生效）
-	if addr, ok := e.systemHosts[hostname]; ok {
-		return addr, true
-	}
-	// 规则 hosts（来自 .rules 文件）
 	if addr, ok := e.hostsMap[hostname]; ok {
 		return addr, true
 	}

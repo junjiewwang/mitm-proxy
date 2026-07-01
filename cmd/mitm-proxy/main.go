@@ -48,6 +48,7 @@ func (c *Config) proxyConfig() *ProxyConfig {
 	return &ProxyConfig{
 		CertDir:          c.Proxy.CertDir,
 		InterceptDomains: c.Proxy.InterceptDomains,
+		UpstreamMap:      c.Proxy.UpstreamMap,
 	}
 }
 
@@ -77,23 +78,24 @@ func loadConfig(path string) (*Config, error) {
 		cfg.Rules.WatchInterval = 2 * time.Second
 	}
 	// 加载 hosts 文件（Whistle 格式：IP domain）
+	if cfg.Proxy.UpstreamMap == nil {
+		cfg.Proxy.UpstreamMap = make(map[string]string)
+	}
 	if cfg.Proxy.HostsFile != "" {
-		if hosts, err := loadHostsFile(cfg.Proxy.HostsFile); err != nil {
+		if err := loadHostsFile(cfg.Proxy.HostsFile, cfg.Proxy.UpstreamMap); err != nil {
 			log.Printf("[Config] WARNING: load hosts file %s: %v", cfg.Proxy.HostsFile, err)
 		} else {
-			cfg.Proxy.UpstreamMap = hosts // 保留兼容，同时传给 RuleEngine
-			log.Printf("[Config] Loaded %d host mappings from %s", len(hosts), cfg.Proxy.HostsFile)
+			log.Printf("[Config] Loaded %d host mappings from %s", len(cfg.Proxy.UpstreamMap), cfg.Proxy.HostsFile)
 		}
 	}
 	return &cfg, nil
 }
 
-// loadHostsFile 解析 Whistle 格式的 hosts 文件，返回 domain→addr 映射
-func loadHostsFile(path string) (map[string]string, error) {
-	result := make(map[string]string)
+// loadHostsFile 解析 Whistle 格式的 hosts 文件
+func loadHostsFile(path string, upstreamMap map[string]string) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open hosts file: %w", err)
+		return fmt.Errorf("open hosts file: %w", err)
 	}
 	defer f.Close()
 
@@ -122,10 +124,10 @@ func loadHostsFile(path string) (map[string]string, error) {
 			if !strings.Contains(addr, ":") {
 				addr += ":443"
 			}
-			result[domain] = addr
+			upstreamMap[domain] = addr
 		}
 	}
-	return result, scanner.Err()
+	return scanner.Err()
 }
 
 func main() {
@@ -160,10 +162,6 @@ func main() {
 	// 规则引擎初始化
 	// ========================================
 	ruleEngine := rule.NewRuleEngine()
-	// 加载系统 hosts 到 RuleEngine（热更新即时生效）
-	if cfg.Proxy.HostsFile != "" && cfg.Proxy.UpstreamMap != nil {
-		ruleEngine.SetSystemHosts(cfg.Proxy.UpstreamMap)
-	}
 	ruleManager := rule.NewRuleManager(rule.ManagerConfig{
 		Dir:           cfg.Rules.Dir,
 		HotReload:     cfg.Rules.HotReload,
@@ -221,18 +219,11 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
-	// hosts 文件管理 API（通过 RuleEngine 热更新，即时生效）
+	// hosts 文件管理 API
 	if cfg.Proxy.HostsFile != "" {
 		hostsPath := cfg.Proxy.HostsFile
 		registerHostsAPI(ginEngine, hostsPath, func() error {
-			hosts, err := loadHostsFile(hostsPath)
-			if err != nil {
-				return err
-			}
-			// 即时热更新到 RuleEngine
-			ruleEngine.SetSystemHosts(hosts)
-			log.Printf("[Config] Hot-reloaded %d host mappings", len(hosts))
-			return nil
+			return loadHostsFile(hostsPath, cfg.Proxy.UpstreamMap)
 		})
 	}
 
