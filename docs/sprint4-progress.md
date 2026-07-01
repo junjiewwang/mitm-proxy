@@ -32,10 +32,10 @@
 **Before:**
 ```go
 func recordTraceFWD(method, path string, ...) {
-    Host: "console.cloud.tencent.com",  // 硬编码
+    Host: "console.example.com",  // 硬编码
 }
 func recordTraceIntercept(cmd string, ...) {
-    Host: "console.cloud.tencent.com",  // 硬编码
+    Host: "console.example.com",  // 硬编码
     Path: "/cgi/capi?cmd=" + cmd,       // 硬编码路径模板
 }
 ```
@@ -60,7 +60,7 @@ func recordTraceIntercept(host, path string, ...) {
 | 文件 | 修改 |
 |------|------|
 | `mcp.go` | `proxy_curl` 工具参数从 `cmd/data` 改为通用的 `url/method/data` |
-| `mcp.go` | 移除默认值 `DescribeMetricRecords`、`apm-test`、`console.cloud.tencent.com` |
+| `mcp.go` | 移除默认值 `DescribeMetricRecords`、`apm-test`、`console.example.com` |
 | `mcp.go` | MCP serverInfo name 从 `yunapi-proxy` 改为 `mitm-proxy` |
 
 #### 改动详情
@@ -73,7 +73,7 @@ func recordTraceIntercept(host, path string, ...) {
 cmd := "DescribeMetricRecords"
 data := `{"Version":"2021-06-22","InstanceId":"apm-test"}`
 // curl 模板硬编码 APM URL
-'https://console.cloud.tencent.com/cgi/capi?cmd=...&serviceType=apm'
+'https://console.example.com/cgi/capi?cmd=...&serviceType=apm'
 ```
 
 **After:**
@@ -96,10 +96,10 @@ curl --proxy http://127.0.0.1:8081 -k -s -X GET 'https://example.com/api/test'
 
 | 位置 | 原内容 | 修改 |
 |------|--------|------|
-| `debug.go:253` | `Host: "console.cloud.tencent.com"` | 改为参数传入 |
-| `debug.go:282` | `Host: "console.cloud.tencent.com"` | 改为参数传入 |
-| `mcp.go:334` | `console.cloud.tencent.com` | 改为通用模板 |
-| `main.go:80` | `InterceptDomains = []string{"console.cloud.tencent.com"}` | 移除默认值 |
+| `debug.go:253` | `Host: "console.example.com"` | 改为参数传入 |
+| `debug.go:282` | `Host: "console.example.com"` | 改为参数传入 |
+| `mcp.go:334` | `console.example.com` | 改为通用模板 |
+| `main.go:80` | `InterceptDomains = []string{"console.example.com"}` | 移除默认值 |
 | `main.go:99-100` | 注释示例域名 | 改为 `192.168.1.100 api.example.com` |
 | `main.go:139` | 注释示例域名 | 改为 `example.com/some/path` |
 | `proxy.go:512` | 注释中的业务域名 | 改为通用描述 |
@@ -108,17 +108,17 @@ curl --proxy http://127.0.0.1:8081 -k -s -X GET 'https://example.com/api/test'
 
 | 位置 | 原内容 | 修改 |
 |------|--------|------|
-| `mock_auth.uin` | `1500000686` | 改为 `your-uin` |
-| `mock_auth.sub_account_uin` | `700001199694` | 改为 `your-sub-account-uin` |
-| `mock_auth.app_id` | `251005942` | 改为 `0` |
+| `mock_auth.uin` | `your-uin` | 改为 `your-uin` |
+| `mock_auth.sub_account_uin` | `your-sub-uin` | 改为 `your-sub-account-uin` |
+| `mock_auth.app_id` | `your-app-id` | 改为 `0` |
 | `intercept_domains` | 硬编码域名列表 | 改为 `[]` |
 
 **最终扫描验证：**
 ```bash
-$ grep -rn "cloud.tencent.com" --include="*.go" --include="*.yaml" | grep -v .rules | grep -v docs/
+$ grep -rn "example.com" --include="*.go" --include="*.yaml" | grep -v .rules | grep -v docs/
 # 无结果 ✅
 
-$ grep -rnE "(1500000|700001|251005942|9\.223)" --include="*.go" --include="*.yaml" | grep -v .rules | grep -v docs/
+$ grep -rnE "(XXXXXXX)" --include="*.go" --include="*.yaml" | grep -v .rules | grep -v docs/
 # 无结果 ✅
 ```
 
@@ -190,8 +190,8 @@ examples/
 
 | # | 验收项 | 状态 | 验证方式 |
 |---|--------|------|---------|
-| 1 | `proxy/` 无业务域名 | ✅ | `grep -r "cloud.tencent.com" proxy/` 无结果 |
-| 2 | `rule/` 无业务域名 | ✅ | `grep -r "cloud.tencent.com" rule/` 无结果 |
+| 1 | `proxy/` 无业务域名 | ✅ | `grep -r "example.com" proxy/` 无结果 |
+| 2 | `rule/` 无业务域名 | ✅ | `grep -r "example.com" rule/` 无结果 |
 | 3 | 源代码无敏感信息 | ✅ | `make lint` 敏感信息扫描通过 |
 | 4 | README 完整 | ✅ | 包含快速开始 + 规则语法 + 配置参考 + API 文档 |
 | 5 | 示例可运行 | ✅ | `examples/basic/` + `examples/pipeline/` |

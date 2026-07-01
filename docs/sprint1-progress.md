@@ -117,4 +117,4 @@ main (根目录)
 
 1. `proxy/interfaces.go` 与根目录 `interfaces.go` 有重复定义（物理迁移后消除）
 2. `processor/` 包中的 `Adapter` 接口与 `adapter/` 包中的接口相同（依赖方向问题，需在物理迁移时统一）
-3. debug.go 中的 `recordTraceFWD`/`recordTraceIntercept` 仍硬编码 `console.cloud.tencent.com`（Sprint 4 解决）
+3. debug.go 中的 `recordTraceFWD`/`recordTraceIntercept` 仍硬编码 `console.example.com`（Sprint 4 解决）

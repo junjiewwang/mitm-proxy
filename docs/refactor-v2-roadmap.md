@@ -394,13 +394,13 @@ region_map:
 @end
 
 # ═══ MITM 拦截域名 ═══
-@intercept console.cloud.tencent.com
-@intercept console-hc.cloud.tencent.com
-@intercept cloudcache.tencent-cloud.com
+@intercept console.example.com
+@intercept console-hc.example.com
+@intercept cdn.example.com
 
 # ═══ Hosts 映射 ═══
-9.223.72.139 console.cloud.tencent.com console-hc.cloud.tencent.com
-139.199.214.200 cloudcache.tencent-cloud.com
+10.0.0.1 console.example.com console-hc.example.com
+10.0.0.2 cdn.example.com
 
 # ═══ API 拦截（走 JS 脚本拆包/组包）═══
 /\/cgi\/capi\?.*action=delegate&.*serviceType=apm/  script://self
