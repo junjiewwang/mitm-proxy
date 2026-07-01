@@ -75,42 +75,29 @@
   <!-- ============ Hosts Tab ============ -->
   <section id="tab-hosts" class="tab-content">
     <div class="toolbar">
-      <button class="btn btn-primary" id="btnAddHost" title="Add row">+ Add</button>
-      <button class="btn btn-sm" id="btnHostsEditToggle" title="Switch to text editor">📝 Edit</button>
-      <button class="btn btn-sm btn-primary" id="btnSaveHosts" title="Save (Ctrl+S)">💾 Save</button>
+      <button class="btn btn-primary" id="btnAddHost">+ Add</button>
+      <button class="btn btn-sm" id="btnSaveHosts">💾 Save</button>
       <div class="toolbar-spacer"></div>
       <span class="count" id="hostsCount">0 entries</span>
     </div>
-
-    <!-- Table view -->
-    <div id="hostsTableView">
-      <div class="hosts-table-wrap">
-        <table class="hosts-table">
-          <thead><tr>
-            <th style="width:40px">On</th>
-            <th style="width:180px">IP</th>
-            <th>Domains</th>
-            <th style="width:60px"></th>
-          </tr></thead>
-          <tbody id="hostsBody"></tbody>
-        </table>
-      </div>
-      <div class="empty-state" id="hostsEmpty"><p>No hosts entries</p></div>
-      <div class="hosts-add-row" id="hostsAddRow" style="display:none">
-        <input type="text" id="hostAddIP" placeholder="IP">
-        <input type="text" id="hostAddDomains" placeholder="domain1 domain2">
-        <button class="btn btn-sm btn-primary" id="btnHostAddConfirm">✓</button>
-        <button class="btn btn-sm" id="btnHostAddCancel">✕</button>
-      </div>
+    <div class="hosts-table-wrap">
+      <table class="hosts-table">
+        <thead><tr>
+          <th style="width:40px">On</th>
+          <th style="width:180px">IP</th>
+          <th>Domains</th>
+          <th style="width:60px"></th>
+        </tr></thead>
+        <tbody id="hostsBody"></tbody>
+      </table>
     </div>
-
-    <!-- Text editor view -->
-    <div id="hostsEditorView" style="display:none;flex:1;overflow:hidden">
-      <div class="editor-container" style="height:100%">
-        <div class="line-numbers" id="hostsLineNumbers"></div>
-        <textarea id="hostsTextarea" spellcheck="false" wrap="off" placeholder="10.0.0.1 console.example.com
-# 10.0.0.2 cdn.example.com"></textarea>
-      </div>
+    <div class="empty-state" id="hostsEmpty"><p>No hosts entries</p></div>
+    <!-- Add/edit row -->
+    <div class="hosts-add-row" id="hostsAddRow" style="display:none">
+      <input type="text" id="hostAddIP" placeholder="IP (e.g. 10.0.0.1)">
+      <input type="text" id="hostAddDomains" placeholder="domain1 domain2">
+      <button class="btn btn-sm btn-primary" id="btnHostAddConfirm">✓</button>
+      <button class="btn btn-sm" id="btnHostAddCancel">✕</button>
     </div>
   </section>
 
