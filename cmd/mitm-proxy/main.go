@@ -221,6 +221,21 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	// 代理控制 API（暂停/恢复）
+	if fwdProxy != nil {
+		ginEngine.GET("/api/proxy/status", func(c *gin.Context) {
+			c.JSON(200, gin.H{"paused": fwdProxy.IsPaused()})
+		})
+		ginEngine.POST("/api/proxy/pause", func(c *gin.Context) {
+			fwdProxy.Pause()
+			c.JSON(200, gin.H{"paused": true})
+		})
+		ginEngine.POST("/api/proxy/resume", func(c *gin.Context) {
+			fwdProxy.Resume()
+			c.JSON(200, gin.H{"paused": false})
+		})
+	}
+
 	// hosts 文件管理 API（通过 RuleEngine 热更新，即时生效）
 	if cfg.Proxy.HostsFile != "" {
 		hostsPath := cfg.Proxy.HostsFile
