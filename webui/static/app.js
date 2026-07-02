@@ -14,7 +14,8 @@
     debouncing: false,
     requests: [],
     reqPaused: false,
-    reqDetailId: null, // 当前展开的请求索引
+    reqDetailId: null,
+    clearedAt: null,        // Clear 时记录时间戳，过滤旧数据
     lastErrors: [],
     lastWarnings: [],
   };
@@ -633,6 +634,8 @@
 
   function onReqEvent(evt) {
     if (state.reqPaused) return;
+    // Clear 后的旧事件不显示
+    if (state.clearedAt && evt.time <= state.clearedAt) return;
     // 仅在 Requests Tab 激活时渲染
     if (!$('#tab-requests') || !$('#tab-requests').classList.contains('active')) return;
     if (!reqMatchesFilter(evt)) return;
@@ -806,6 +809,10 @@
       params.offset = 0;
       var data = await api.getRequests(params);
       state.requests = data.results || [];
+      // Clear 后过滤旧数据
+      if (state.clearedAt && state.requests.length > 0) {
+        state.requests = state.requests.filter(function(evt) { return evt.time > state.clearedAt; });
+      }
       renderRequestTable();
     } catch (e) {
       console.error('Load requests failed:', e);
@@ -929,6 +936,7 @@
       var el = $('#' + id);
       if (!el) return;
       el.addEventListener('change', function () {
+        state.clearedAt = null; // 改过滤器 = 重新查询，取消 Clear 限制
         loadRequests();
       });
     });
@@ -939,6 +947,7 @@
       urlFilter.addEventListener('input', function () {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(function () {
+          state.clearedAt = null;
           loadRequests();
         }, 300);
       });
@@ -961,6 +970,7 @@
       btnClear.addEventListener('click', function () {
         state.requests = [];
         state.reqDetailId = null;
+        state.clearedAt = new Date().toISOString(); // 标记清除时间，阻止旧数据回流
         var tbody = $('#reqBody');
         if (tbody) tbody.innerHTML = '';
         var panel = $('#reqDetailPanel');

@@ -190,12 +190,41 @@ func (p *Parser) parseConfigBlock(script *RuleScript, yamlContent string) error 
 		script.Config = make(map[string]any)
 		return nil
 	}
-	var config map[string]any
-	if err := yaml.Unmarshal([]byte(yamlContent), &config); err != nil {
+
+	// yaml.v3 将整数键的嵌套 map 解析为 map[interface{}]interface{}，
+	// 注入 goja VM 时 goja 将其转为 JS 的 number 键，但脚本使用 String() 做字符串键查询会 miss。
+	// 先解到 interface{} 再递归转换为 map[string]interface{} 确保所有键为 string。
+	var raw interface{}
+	if err := yaml.Unmarshal([]byte(yamlContent), &raw); err != nil {
 		return fmt.Errorf("parse @config YAML: %w", err)
 	}
-	script.Config = config
+	script.Config = normalizeYAMLMap(raw).(map[string]interface{})
 	return nil
+}
+
+// normalizeYAMLMap 递归将 yaml.v3 的 map[interface{}]interface{} 转为 map[string]interface{}
+func normalizeYAMLMap(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		// 顶级 map 已正确，但嵌套可能仍有 map[interface{}]interface{}
+		for k, vv := range val {
+			val[k] = normalizeYAMLMap(vv)
+		}
+		return val
+	case map[interface{}]interface{}:
+		m := make(map[string]interface{}, len(val))
+		for k, vv := range val {
+			m[fmt.Sprint(k)] = normalizeYAMLMap(vv)
+		}
+		return m
+	case []interface{}:
+		for i, item := range val {
+			val[i] = normalizeYAMLMap(item)
+		}
+		return val
+	default:
+		return v
+	}
 }
 
 // parseScriptHeader 解析 @script 行头，提取脚本名称
