@@ -548,6 +548,61 @@
     catch (e) { toast('Validate failed: ' + e.message, 'error'); }
   }
 
+  function toggleComment(ta) {
+    var text = ta.value, start = ta.selectionStart, end = ta.selectionEnd;
+    // 确定受影响的行范围
+    var before = text.substring(0, start);
+    var sel = text.substring(start, end);
+    var after = text.substring(end);
+    var lineStart = text.lastIndexOf('\n', start - 1) + 1;
+    var lineEnd = text.indexOf('\n', end - 1);
+    if (lineEnd === -1) lineEnd = text.length;
+    var block = text.substring(lineStart, lineEnd);
+    var lines = block.split('\n');
+    // 按行为单位操作，保持选区内的行级完整性
+    var selStartLine = before.split('\n').length - 1;
+    var selEndLine = selStartLine + Math.max(0, (end > lineStart ? text.substring(lineStart, end).split('\n').length - 1 : 0));
+    // 获取完整受影响行
+    var allLines = text.split('\n');
+    var targetLines = [];
+    for (var i = selStartLine; i <= selEndLine && i < allLines.length; i++) {
+      targetLines.push(i);
+    }
+    if (targetLines.length === 0) return;
+    // 判断是否全部已注释
+    var allCommented = targetLines.every(function(li) {
+      var ln = allLines[li];
+      return ln.trimStart().startsWith('#');
+    });
+    var newLines = allLines.slice();
+    if (allCommented) {
+      // 全部取消注释：移除 '# ' 前缀（2字符），精确恢复原始内容
+      targetLines.forEach(function(li) {
+        var ln = newLines[li];
+        var idx = ln.indexOf('# ');
+        if (idx >= 0) {
+          newLines[li] = ln.substring(0, idx) + ln.substring(idx + 2);
+        } else if (ln.trimStart().startsWith('#')) {
+          // 备用：仅有 # 无空格
+          var i = ln.indexOf('#');
+          newLines[li] = ln.substring(0, i) + ln.substring(i + 1);
+        }
+      });
+    } else {
+      // 全部注释：每行前添加 '# '（2字符），不修改原始内容
+      targetLines.forEach(function(li) {
+        var ln = newLines[li];
+        if (ln.trim() !== '') {
+          newLines[li] = '# ' + ln;
+        }
+      });
+    }
+    ta.value = newLines.join('\n');
+    // 恢复光标位置
+    ta.selectionStart = start;
+    ta.selectionEnd = end;
+  }
+
   function initEditor() {
     const ta = $('#editorTextarea');
     let validateTimer;
@@ -573,6 +628,14 @@
         this.selectionStart = this.selectionEnd = s + 2;
         state.editorDirty = true;
         updateLineNumbers();
+      }
+      // Ctrl+/ / Cmd+/ 切换注释
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        toggleComment(this);
+        state.editorDirty = true;
+        updateLineNumbers();
+        updateHighlightOverlay(this.value);
       }
     });
     document.addEventListener('keydown', function (e) {
