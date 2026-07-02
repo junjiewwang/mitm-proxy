@@ -69,9 +69,11 @@ func (v *Validator) validateProxyRule(rule *Rule) []ParseError {
 		patternStr := rule.Pattern.String()
 		if err := checkRegexComplexity(patternStr); err != nil {
 			errors = append(errors, ParseError{
-				Line:    rule.Line,
-				Message: fmt.Sprintf("regex complexity warning: %s", err),
-				Raw:     rule.Raw,
+				Line:     rule.Line,
+				Column:   1,
+				Severity: "warning",
+				Message:  fmt.Sprintf("regex complexity warning: %s", err),
+				Raw:      rule.Raw,
 			})
 		}
 	}
@@ -79,24 +81,30 @@ func (v *Validator) validateProxyRule(rule *Rule) []ParseError {
 	// 目标 URL 格式检查
 	if rule.Target == "" {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: "proxy rule target is empty",
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "error",
+			Message:  "proxy rule target is empty",
+			Raw:      rule.Raw,
 		})
 	} else if !strings.HasPrefix(rule.Target, "http://") && !strings.HasPrefix(rule.Target, "https://") {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: fmt.Sprintf("proxy target should start with http:// or https://, got: %s", rule.Target),
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "error",
+			Message:  fmt.Sprintf("proxy target should start with http:// or https://, got: %s", rule.Target),
+			Raw:      rule.Raw,
 		})
 	}
 
 	// 超时校验
 	if rule.Timeout > 0 && rule.Timeout < 100*time.Millisecond {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: fmt.Sprintf("timeout too short: %s (min 100ms)", rule.Timeout),
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "warning",
+			Message:  fmt.Sprintf("timeout too short: %s (min 100ms)", rule.Timeout),
+			Raw:      rule.Raw,
 		})
 	}
 
@@ -110,9 +118,11 @@ func (v *Validator) validatePipelineRule(rule *Rule) []ParseError {
 	// 适配器名称非空
 	if rule.Adapter == "" {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: "pipeline rule adapter name is empty",
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "error",
+			Message:  "pipeline rule adapter name is empty",
+			Raw:      rule.Raw,
 		})
 		return errors
 	}
@@ -120,9 +130,11 @@ func (v *Validator) validatePipelineRule(rule *Rule) []ParseError {
 	// 适配器引用检查（如果有已知列表）
 	if len(v.KnownAdapters) > 0 && !v.KnownAdapters[rule.Adapter] {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: fmt.Sprintf("unknown adapter: %q (known: %v)", rule.Adapter, v.knownAdapterList()),
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "warning",
+			Message:  fmt.Sprintf("unknown adapter: %q (known: %v)", rule.Adapter, v.knownAdapterList()),
+			Raw:      rule.Raw,
 		})
 	}
 
@@ -136,18 +148,22 @@ func (v *Validator) validateHostsRule(rule *Rule) []ParseError {
 	// IP 格式检查
 	if rule.IP == "" {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: "hosts rule IP is empty",
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "error",
+			Message:  "hosts rule IP is empty",
+			Raw:      rule.Raw,
 		})
 	}
 
 	// 域名列表非空
 	if len(rule.Domains) == 0 {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: "hosts rule requires at least one domain",
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "error",
+			Message:  "hosts rule requires at least one domain",
+			Raw:      rule.Raw,
 		})
 	}
 
@@ -160,9 +176,11 @@ func (v *Validator) validateExactRule(rule *Rule) []ParseError {
 
 	if rule.Target == "" {
 		errors = append(errors, ParseError{
-			Line:    rule.Line,
-			Message: "exact rule target is empty",
-			Raw:     rule.Raw,
+			Line:     rule.Line,
+			Column:   1,
+			Severity: "error",
+			Message:  "exact rule target is empty",
+			Raw:      rule.Raw,
 		})
 	}
 

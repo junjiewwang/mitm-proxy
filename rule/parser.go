@@ -64,11 +64,18 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 		if strings.HasPrefix(line, "@config") {
 			configBlock, endLine, err := p.readBlock(scanner, &lineNo, "config")
 			if err != nil {
-				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+				errors = append(errors, ParseError{
+					Line:       lineNo,
+					Column:     len(rawLine) + 1,
+					Severity:   "error",
+					Message:    err.Error(),
+					Raw:        line,
+					Suggestion: "Add @end to close the config block",
+				})
 				continue
 			}
 			if err := p.parseConfigBlock(script, configBlock); err != nil {
-				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+				errors = append(errors, ParseError{Line: lineNo, Column: 1, Severity: "error", Message: err.Error(), Raw: line})
 			}
 			lineNo = endLine // 跳过多行块
 			continue
@@ -80,7 +87,7 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 				// @script name file://path — 引用外部 JS 文件
 				extSource, err := os.ReadFile(externalPath)
 				if err != nil {
-					errors = append(errors, ParseError{Line: lineNo, Message: fmt.Sprintf("read external script: %v", err), Raw: line})
+					errors = append(errors, ParseError{Line: lineNo, Column: 1, Severity: "error", Message: fmt.Sprintf("read external script: %v", err), Raw: line})
 				} else {
 					if script.Scripts == nil {
 						script.Scripts = make(map[string]string)
@@ -92,7 +99,14 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 
 			scriptBlock, endLine, err := p.readBlock(scanner, &lineNo, "script")
 			if err != nil {
-				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+				errors = append(errors, ParseError{
+					Line:       lineNo,
+					Column:     len(rawLine) + 1,
+					Severity:   "error",
+					Message:    err.Error(),
+					Raw:        line,
+					Suggestion: "Add @end to close the script block",
+				})
 				continue
 			}
 			if script.Scripts == nil {
@@ -110,17 +124,21 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 
 		// 指令（@开头）
 		if strings.HasPrefix(line, "@") {
-			if err := p.parseDirective(script, line, lineNo); err != nil {
-				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+			if err := p.parseDirective(script, line, lineNo, rawLine); err != nil {
+				col := p.computeDirectiveErrorColumn(rawLine, err)
+				sug := p.computeDirectiveSuggestion(err)
+				errors = append(errors, ParseError{Line: lineNo, Column: col, Severity: "error", Message: err.Error(), Raw: line, Suggestion: sug})
 			}
 			continue
 		}
 
 		// 正则规则（/开头）
 		if strings.HasPrefix(line, "/") {
-			rule, err := p.parseRegexRule(line, lineNo)
+			rule, err := p.parseRegexRule(line, lineNo, rawLine)
 			if err != nil {
-				errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+				col := p.computeRegexErrorColumn(rawLine, err)
+				sug := p.computeRegexSuggestion(err)
+				errors = append(errors, ParseError{Line: lineNo, Column: col, Severity: "error", Message: err.Error(), Raw: line, Suggestion: sug})
 				continue
 			}
 			script.Rules = append(script.Rules, *rule)
@@ -128,9 +146,11 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 		}
 
 		// hosts 映射（IP 开头）或精确路径
-		rule, err := p.parseHostsOrExact(line, lineNo)
+		rule, err := p.parseHostsOrExact(line, lineNo, rawLine)
 		if err != nil {
-			errors = append(errors, ParseError{Line: lineNo, Message: err.Error(), Raw: line})
+			col := p.computeHostsErrorColumn(rawLine, err)
+			sug := p.computeHostsSuggestion(err)
+			errors = append(errors, ParseError{Line: lineNo, Column: col, Severity: "error", Message: err.Error(), Raw: line, Suggestion: sug})
 			continue
 		}
 		script.Rules = append(script.Rules, *rule)
@@ -197,7 +217,7 @@ func (p *Parser) parseScriptHeader(line string) (scriptName string, isExternal b
 }
 
 // parseDirective 解析 @ 指令
-func (p *Parser) parseDirective(script *RuleScript, line string, lineNo int) error {
+func (p *Parser) parseDirective(script *RuleScript, line string, lineNo int, rawLine string) error {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return fmt.Errorf("empty directive")
@@ -243,7 +263,7 @@ func (p *Parser) parseDirective(script *RuleScript, line string, lineNo int) err
 //
 //	target 左侧空格前的最后一个 / 就是正则结尾分隔符。
 //	正则内部的 / 无需转义（但转义了也兼容）。
-func (p *Parser) parseRegexRule(line string, lineNo int) (*Rule, error) {
+func (p *Parser) parseRegexRule(line string, lineNo int, rawLine string) (*Rule, error) {
 	// 1. 定位 target：找到以空格分隔的 http:// | https:// | pipeline:// 部分
 	targetIdx := p.findTargetIndex(line)
 	if targetIdx < 0 {
@@ -342,7 +362,7 @@ func (p *Parser) findTargetIndex(line string) int {
 }
 
 // parseHostsOrExact 解析 hosts 映射或精确路径规则
-func (p *Parser) parseHostsOrExact(line string, lineNo int) (*Rule, error) {
+func (p *Parser) parseHostsOrExact(line string, lineNo int, rawLine string) (*Rule, error) {
 	fields := strings.Fields(line)
 	if len(fields) < 2 {
 		return nil, fmt.Errorf("invalid rule format")
@@ -411,4 +431,134 @@ func isIPLike(s string) bool {
 		return true
 	}
 	return false
+}
+
+// ========================================
+// Column 计算 & Suggestion 辅助方法
+// ========================================
+
+// computeRegexErrorColumn 根据 rawLine 和错误信息计算正则规则错误的列号
+func (p *Parser) computeRegexErrorColumn(rawLine string, err error) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "requires a target"):
+		// 正则末尾后找不到 target，指向正则结尾 / 之后
+		// 从 rawLine 中找最后一个 /（正则结尾分隔符）
+		targetIdx := p.findTargetIndex(rawLine)
+		if targetIdx < 0 {
+			// 找不到 target，指向第一个 / 的位置
+			if idx := strings.Index(rawLine, "/"); idx >= 0 {
+				return idx + 1
+			}
+		}
+		return 1
+	case strings.Contains(msg, "not properly delimited"):
+		// 正则格式不对，指向第一个 /
+		if idx := strings.Index(rawLine, "/"); idx >= 0 {
+			return idx + 1
+		}
+		return 1
+	case strings.Contains(msg, "empty regex pattern"):
+		// 空正则 // ，指向第一个 / 之后
+		if idx := strings.Index(rawLine, "//"); idx >= 0 {
+			return idx + 2
+		}
+		return 1
+	case strings.Contains(msg, "invalid regex"):
+		// 正则语法错误，指向第一个 /
+		if idx := strings.Index(rawLine, "/"); idx >= 0 {
+			return idx + 1
+		}
+		return 1
+	}
+	return 1
+}
+
+// computeRegexSuggestion 根据正则规则错误提供修复建议
+func (p *Parser) computeRegexSuggestion(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "requires a target"):
+		return "Add an http://, https://, or script:// target after the regex pattern"
+	case strings.Contains(msg, "not properly delimited"):
+		return "Wrap the regex pattern with slashes, e.g. /api/v1/"
+	case strings.Contains(msg, "empty regex pattern"):
+		return "Add a regex pattern between the slashes, e.g. /api/v1/"
+	case strings.Contains(msg, "invalid regex"):
+		return "Check regex syntax. Common issues: unescaped special chars, unmatched parentheses"
+	}
+	return ""
+}
+
+// computeDirectiveErrorColumn 根据 rawLine 和错误信息计算指令错误的列号
+func (p *Parser) computeDirectiveErrorColumn(rawLine string, err error) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "@priority requires a value"):
+		// @priority 后面的位置
+		if idx := strings.Index(rawLine, "@priority"); idx >= 0 {
+			return idx + len("@priority") + 1
+		}
+	case strings.Contains(msg, "@priority value must be integer"):
+		// @priority 后面的值位置
+		if idx := strings.Index(rawLine, "@priority"); idx >= 0 {
+			return idx + len("@priority") + 1
+		}
+	case strings.Contains(msg, "unknown directive"):
+		// 未知指令的起始位置
+		if idx := strings.Index(rawLine, "@"); idx >= 0 {
+			return idx + 1
+		}
+	}
+	return 1
+}
+
+// computeDirectiveSuggestion 根据指令错误提供修复建议
+func (p *Parser) computeDirectiveSuggestion(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "unknown directive"):
+		return "Valid directives: @name, @priority, @intercept, @config, @script, @timeout"
+	case strings.Contains(msg, "@priority requires a value"):
+		return "Example: @priority 100"
+	case strings.Contains(msg, "@priority value must be integer"):
+		return "Priority must be a positive integer, e.g. @priority 100"
+	}
+	return ""
+}
+
+// computeHostsErrorColumn 根据 rawLine 和错误信息计算 hosts/exact 规则错误的列号
+func (p *Parser) computeHostsErrorColumn(rawLine string, err error) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "hosts rule requires at least one domain"):
+		// IP 后面的位置
+		fields := strings.Fields(rawLine)
+		if len(fields) > 0 {
+			return len(fields[0]) + 1
+		}
+	case strings.Contains(msg, "exact rule requires a target"):
+		// domain/path 后面的位置
+		fields := strings.Fields(rawLine)
+		if len(fields) > 0 {
+			return len(fields[0]) + 1
+		}
+	case strings.Contains(msg, "invalid rule format"):
+		return 1
+	}
+	return 1
+}
+
+// computeHostsSuggestion 根据 hosts/exact 规则错误提供修复建议
+func (p *Parser) computeHostsSuggestion(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "hosts rule requires at least one domain"):
+		return "Format: IP_ADDRESS domain1 domain2 ..."
+	case strings.Contains(msg, "exact rule requires a target"):
+		return "Format: domain/path http://target-url"
+	case strings.Contains(msg, "invalid rule format"):
+		return "Valid formats: /regex/ target, IP domain1 domain2, or domain/path target"
+	}
+	return ""
 }

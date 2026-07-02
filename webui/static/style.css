@@ -696,3 +696,39 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .col-ctype { width: 50px; }
 .col-size { width: 60px; }
 
+/* Line-level error markers */
+.line-numbers .ln-error {
+  background: rgba(248, 81, 73, 0.25);
+  color: var(--red);
+  border-left: 2px solid var(--red);
+}
+.line-numbers .ln-warning {
+  background: rgba(210, 153, 34, 0.15);
+  color: var(--yellow);
+  border-left: 2px solid var(--yellow);
+}
+
+/* Validation bar enhancements */
+.validation-bar.clean {
+  background: rgba(63, 185, 80, 0.08);
+  color: var(--green);
+  border-top: 1px solid rgba(63, 185, 80, 0.2);
+}
+.v-header { font-weight: 500; margin-bottom: 4px; }
+.v-icon { margin-right: 4px; }
+.v-warn { color: var(--yellow); margin-left: 4px; }
+.v-err-item {
+  padding: 3px 0; font-size: 11px; color: var(--red);
+  border-bottom: 1px solid rgba(248, 81, 73, 0.1);
+}
+.v-warn-item {
+  padding: 3px 0; font-size: 11px; color: var(--yellow);
+  border-bottom: 1px solid rgba(210, 153, 34, 0.1);
+}
+.v-err-item:hover, .v-warn-item:hover { background: var(--bg-hover); }
+.v-sev { margin-right: 4px; font-weight: bold; }
+.v-sug {
+  font-size: 10px; color: var(--text-secondary);
+  padding: 2px 0 2px 16px;
+}
+

@@ -15,6 +15,8 @@
     requests: [],
     reqPaused: false,
     reqDetailId: null, // 当前展开的请求索引
+    lastErrors: [],
+    lastWarnings: [],
   };
 
   // ========== API Layer ==========
@@ -379,6 +381,8 @@
     $('#editorActions').style.display = 'flex';
     $('#editorTitle').textContent = id;
     $('#editorTextarea').value = content || '';
+    state.lastErrors = [];
+    state.lastWarnings = [];
     updateLineNumbers();
     updateHighlightOverlay(content);
     hideValidation();
@@ -404,9 +408,20 @@
     const lineNumbers = $('#lineNumbers');
     if (!lineNumbers) return;
 
+    // 构建错误/警告行号集合
+    var errorLines = {};
+    var warningLines = {};
+    (state.lastErrors || []).forEach(function(e) {
+      if (e.line) errorLines[e.line] = e.message;
+    });
+    (state.lastWarnings || []).forEach(function(w) {
+      if (w.line) warningLines[w.line] = w.message;
+    });
+
     let inConfig = false, inScript = false;
     let numsHtml = '';
     for (let i = 0; i < lines.length; i++) {
+      const lineNum = i + 1;
       const line = lines[i].trim();
       const openingConfig = !inScript && line.startsWith('@config');
       const openingScript = !inConfig && line.startsWith('@script');
@@ -421,7 +436,18 @@
       else if (line.startsWith('@name') || line.startsWith('@priority')) cls = 'ln-directive';
       else if (line.startsWith('/')) cls = 'ln-regex';
       else if (isIPLike(line.split(/\s+/)[0])) cls = 'ln-hosts';
-      numsHtml += '<span class="' + cls + '">' + (i + 1) + '</span>\n';
+
+      // 错误/警告标注优先级最高
+      var titleAttr = '';
+      if (errorLines[lineNum]) {
+        cls += ' ln-error';
+        titleAttr = ' title="' + escapeHtml(errorLines[lineNum]).replace(/"/g, '&quot;') + '"';
+      } else if (warningLines[lineNum]) {
+        cls += ' ln-warning';
+        titleAttr = ' title="' + escapeHtml(warningLines[lineNum]).replace(/"/g, '&quot;') + '"';
+      }
+
+      numsHtml += '<span class="' + cls + '"' + titleAttr + '>' + lineNum + '</span>\n';
       // 切换状态
       if (openingConfig) inConfig = true;
       else if (openingScript) inScript = true;
@@ -439,18 +465,61 @@
   }
 
   function showValidation(result) {
-    const bar = $('#validationBar');
+    var bar = $('#validationBar');
+    if (!bar) return;
     bar.style.display = '';
+
+    var errorCount = result.error_count != null ? result.error_count : (result.errors || []).length;
+    var warningCount = result.warning_count != null ? result.warning_count : (result.warnings || []).length;
+
     if (result.valid) {
-      bar.className = 'validation-bar valid';
-      bar.innerHTML = '✓ Validation passed';
+      bar.className = 'validation-bar clean';
+      bar.innerHTML = '<span class="v-icon">✓</span> Rules valid' +
+        (warningCount > 0 ? ' <span class="v-warn">(' + warningCount + ' warnings)</span>' : '');
     } else {
       bar.className = 'validation-bar invalid';
-      let html = '';
-      (result.errors || []).forEach(err => {
-        html += '<div class="validation-error">Line ' + (err.Line || '?') + ': ' + escapeHtml(err.Message || '') + '</div>';
+      var html = '<div class="v-header"><span class="v-icon">✗</span>' +
+        errorCount + ' error(s), ' + warningCount + ' warning(s)</div>';
+      var issues = [];
+      (result.errors || []).forEach(function(e) { issues.push({severity: 'error', line: e.line, msg: e.message, sug: e.suggestion}); });
+      (result.warnings || []).forEach(function(w) { issues.push({severity: 'warning', line: w.line, msg: w.message, sug: w.suggestion}); });
+      // 按行号排序
+      issues.sort(function(a, b) { return a.line - b.line; });
+      issues.forEach(function(iss) {
+        var cls = iss.severity === 'error' ? 'v-err-item' : 'v-warn-item';
+        html += '<div class="' + cls + '" data-line="' + iss.line + '" style="cursor:pointer">' +
+          '<span class="v-sev">' + (iss.severity === 'error' ? '⨯' : '⚠') + '</span>' +
+          'Line ' + iss.line + ': ' + escapeHtml(iss.msg) +
+          (iss.sug ? '<div class="v-sug">💡 ' + escapeHtml(iss.sug) + '</div>' : '') +
+          '</div>';
       });
-      bar.innerHTML = html || 'Validation failed';
+      bar.innerHTML = html;
+      // 点击错误项跳转到对应行
+      bar.querySelectorAll('[data-line]').forEach(function(el) {
+        el.addEventListener('click', function() {
+          var lineNum = parseInt(this.dataset.line);
+          var ta = $('#editorTextarea');
+          if (ta) {
+            var lines = ta.value.split('\n');
+            var pos = 0;
+            for (var i = 0; i < lineNum - 1 && i < lines.length; i++) {
+              pos += lines[i].length + 1;
+            }
+            ta.focus();
+            ta.setSelectionRange(pos, pos);
+            // 滚动到可见区域
+            var lineHeight = 21;
+            ta.scrollTop = (lineNum - 1) * lineHeight;
+            $('#lineNumbers').scrollTop = ta.scrollTop;
+          }
+        });
+      });
+    }
+
+    // 更新 Validate 按钮 badge
+    var btnValidate = $('#btnValidate');
+    if (btnValidate) {
+      btnValidate.textContent = (errorCount > 0 ? '✗ ' + errorCount : '✓') + ' Validate';
     }
   }
 
@@ -468,12 +537,19 @@
 
   async function validateScript() {
     const content = $('#editorTextarea').value;
-    try { const res = await api.validate(content); showValidation(res); }
+    try {
+      const res = await api.validate(content);
+      state.lastErrors = res.errors || [];
+      state.lastWarnings = res.warnings || [];
+      showValidation(res);
+      updateHighlightOverlay(content); // 刷新行号标注（包含错误/警告着色）
+    }
     catch (e) { toast('Validate failed: ' + e.message, 'error'); }
   }
 
   function initEditor() {
     const ta = $('#editorTextarea');
+    let validateTimer;
     ta.addEventListener('input', function () {
       state.editorDirty = true;
       updateLineNumbers();
@@ -481,6 +557,11 @@
         state.debouncing = true;
         setTimeout(() => { updateHighlightOverlay(ta.value); state.debouncing = false; }, 300);
       }
+      // 实时验证（debounce 500ms）
+      clearTimeout(validateTimer);
+      validateTimer = setTimeout(function() {
+        if (ta.value.trim()) validateScript();
+      }, 500);
     });
     ta.addEventListener('scroll', () => { $('#lineNumbers').scrollTop = ta.scrollTop; });
     ta.addEventListener('keydown', function (e) {

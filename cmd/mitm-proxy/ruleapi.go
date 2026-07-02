@@ -166,10 +166,29 @@ func validateRules(m *rule.RuleManager) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		errors := m.Validate(req.Content)
+
+		// 使用 Validator 进行深度校验（解析 + 语义检查）
+		v := rule.NewValidator(nil)
+		allResults := v.ValidateContent(req.Content)
+
+		// 按 severity 分类
+		var errors []rule.ParseError
+		var warnings []rule.ParseError
+		for _, pe := range allResults {
+			if pe.Severity == "warning" {
+				warnings = append(warnings, pe)
+			} else {
+				// 默认为 error（包括 severity 为空的情况）
+				errors = append(errors, pe)
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"valid":  len(errors) == 0,
-			"errors": errors,
+			"valid":         len(errors) == 0,
+			"errors":        errors,
+			"warnings":      warnings,
+			"error_count":   len(errors),
+			"warning_count": len(warnings),
 		})
 	}
 }

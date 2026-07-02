@@ -43,10 +43,12 @@ type Rule struct {
 
 // ParseError 解析错误（单行级别，不阻止其他行）
 type ParseError struct {
-	Line    int    // 行号
-	Column  int    // 列号
-	Message string // 错误信息
-	Raw     string // 原始行文本
+	Line       int    `json:"line"`
+	Column     int    `json:"column"`
+	Severity   string `json:"severity,omitempty"`
+	Message    string `json:"message"`
+	Raw        string `json:"raw,omitempty"`
+	Suggestion string `json:"suggestion,omitempty"`
 }
 
 func (e *ParseError) Error() string {
