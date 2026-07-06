@@ -65,3 +65,21 @@ type MatchResult struct {
 	Stream     bool     // 是否流式传输
 	CORS       bool     // 是否处理 CORS
 }
+
+// TypeName 返回规则类型字符串（供事件广播等使用）
+func (m *MatchResult) TypeName() string {
+	switch m.RuleType {
+	case RuleTypeHosts:
+		return "hosts"
+	case RuleTypeProxy:
+		return "proxy"
+	case RuleTypePipeline:
+		return "pipeline"
+	case RuleTypeExact:
+		return "exact"
+	case RuleTypeScript:
+		return "script"
+	default:
+		return "proxy"
+	}
+}
