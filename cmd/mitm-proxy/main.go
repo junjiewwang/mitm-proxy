@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 
+	"mitm-proxy/core/dispatch"
 	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
@@ -188,7 +189,7 @@ func main() {
 	// 创建处理器调度（使用 JS 脚本运行时）
 	// JS 脚本的编译已在 RuleManager 加载时预编译完成，调度器直接使用预编译的 Program
 	// ========================================
-	dispatcher := newProcessorDispatcher(scriptRuntime, ruleManager, eventBroadcaster)
+	dispatcher := dispatch.NewProcessorDispatcher(scriptRuntime, ruleManager, eventBroadcaster)
 
 	// 启动正向代理
 	var fwdProxy *ForwardProxy

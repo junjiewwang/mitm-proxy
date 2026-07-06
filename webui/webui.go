@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"mitm-proxy/core/event"
 	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
@@ -26,26 +27,8 @@ var staticFS embed.FS
 // SSE 事件广播器
 // ========================================
 
-// Event SSE 推送的事件
-type Event struct {
-	Type      string `json:"type"`       // match | forward | tunnel | error | reload
-	Time      string `json:"time"`       // ISO8601 时间戳
-	Method    string `json:"method"`     // HTTP 方法
-	URL       string `json:"url"`        // 请求 URL
-	Status    int    `json:"status"`     // 响应状态码
-	LatencyMs int64  `json:"latency_ms"` // 耗时（毫秒）
-	Script    string `json:"script"`     // 匹配的脚本名
-	RuleType  string `json:"rule_type"`  // 规则类型
-	Target    string `json:"target"`     // 目标地址
-	Error     string `json:"error,omitempty"`
-	// Inspectors 新增字段
-	ReqHeaders    map[string]string `json:"req_headers,omitempty"`
-	ReqBody       string            `json:"req_body,omitempty"`
-	RespHeaders   map[string]string `json:"resp_headers,omitempty"`
-	RespBody      string            `json:"resp_body,omitempty"`
-	ContentType   string            `json:"content_type,omitempty"`
-	ContentLength int64             `json:"content_length,omitempty"`
-}
+// Event 代理请求事件（类型别名，指向 core/event.Event）
+type Event = event.Event
 
 // EventBroadcaster SSE 事件广播器（多客户端）
 type EventBroadcaster struct {

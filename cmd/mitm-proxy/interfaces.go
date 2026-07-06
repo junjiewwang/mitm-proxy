@@ -61,11 +61,6 @@ type (
 )
 
 // 从 core/proxy 搬迁的函数代理
-func buildErrorResponse(statusCode int, message string) *http.Response {
-	return proxy.BuildErrorResponse(statusCode, message)
-}
-func setCORSHeaders(h http.Header, r *http.Request) { proxy.SetCORSHeaders(h, r) }
-func isHopByHop(header string) bool                 { return proxy.IsHopByHop(header) }
 func NewForwardProxy(cfg *ProxyConfig, opts ...proxy.ProxyOption) (*ForwardProxy, error) {
 	return proxy.NewForwardProxy(cfg, opts...)
 }
@@ -79,10 +74,3 @@ func WithUpstreamResolver(r UpstreamResolver) proxy.ProxyOption  { return proxy.
 func WithRequestMatcher(m RequestMatcher) proxy.ProxyOption      { return proxy.WithRequestMatcher(m) }
 func WithRequestProcessor(p RequestProcessor) proxy.ProxyOption  { return proxy.WithRequestProcessor(p) }
 func WithTraceRecorder(r TraceRecorder) proxy.ProxyOption        { return proxy.WithTraceRecorder(r) }
-
-func proxyRequest(req *http.Request, body []byte, targetURL string, timeout time.Duration) *http.Response {
-	return proxy.ProxyRequest(req, body, targetURL, timeout)
-}
-func streamRequest(req *http.Request, body []byte, targetURL string) *http.Response {
-	return proxy.StreamRequest(req, body, targetURL)
-}
