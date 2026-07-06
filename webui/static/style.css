@@ -281,6 +281,7 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .type-tunnel { color: var(--text-muted); }
 .type-error { color: var(--red); }
 .type-reload { color: var(--yellow); }
+.type-replay { color: var(--purple); }
 
 .status-ok { color: var(--green); }
 .status-redirect { color: var(--yellow); }
@@ -730,5 +731,43 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .v-sug {
   font-size: 10px; color: var(--text-secondary);
   padding: 2px 0 2px 16px;
+}
+
+/* Resend editor */
+.resend-form { display: flex; flex-direction: column; gap: 8px; }
+.resend-row { display: flex; gap: 8px; }
+.resend-method {
+  width: 110px; padding: 5px 8px; background: var(--bg-primary);
+  border: 1px solid var(--border); color: var(--text-primary);
+  border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font-sans);
+  outline: none;
+}
+.resend-url {
+  flex: 1; padding: 5px 8px; background: var(--bg-primary);
+  border: 1px solid var(--border); color: var(--accent);
+  border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font-mono);
+  outline: none;
+}
+.resend-method:focus, .resend-url:focus, .resend-textarea:focus { border-color: var(--accent); }
+.resend-section h4 {
+  font-size: 11px; color: var(--text-secondary); text-transform: uppercase;
+  letter-spacing: 0.5px; margin-bottom: 4px;
+}
+.resend-textarea {
+  width: 100%; padding: 8px; background: var(--bg-primary);
+  border: 1px solid var(--border); color: var(--text-primary);
+  border-radius: var(--radius-sm); font-size: 12px; font-family: var(--font-mono);
+  outline: none; resize: vertical;
+}
+.resend-headers { min-height: 60px; }
+.resend-body { min-height: 120px; }
+.resend-actions { display: flex; align-items: center; gap: 8px; }
+.resend-status { font-size: 11px; color: var(--text-secondary); margin-left: 8px; }
+.resend-response { margin-top: 8px; }
+.resend-response h4 { margin-bottom: 4px; }
+.resend-response pre {
+  padding: 10px; background: var(--bg-primary); border-radius: var(--radius-sm);
+  font-size: 11px; font-family: var(--font-mono); color: var(--text-primary);
+  max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all;
 }
 

@@ -107,6 +107,13 @@
       const resp = await fetch('/api/scripts');
       return resp.json();
     },
+    async replayRequest(method, url, headers, body) {
+      const resp = await fetch('/api/replay', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ method, url, headers, body }),
+      });
+      return resp.json();
+    },
   };
 
   // ========== Utilities ==========
@@ -994,6 +1001,78 @@
     updateReqScriptFilter();
   }
 
+  // ========== Resend / Edit & Replay ==========
+  function showResendEditor() {
+    var evt = state.requests[state.reqDetailId];
+    if (!evt) return;
+    // 切换到编辑器视图
+    $('#reqNormalView').style.display = 'none';
+    $('#reqResendView').style.display = '';
+    $('#reqDetailTabs').style.display = 'none';
+    $('#btnReqResend').style.display = 'none';
+    $('#reqDetailTitle').textContent = 'Edit & Resend';
+
+    // 填充原始请求数据
+    $('#resendMethod').value = evt.method || 'GET';
+    $('#resendURL').value = evt.url || '';
+    // 将 headers map 转为 key: value 文本
+    var headersText = '';
+    if (evt.req_headers) {
+      Object.keys(evt.req_headers).forEach(function(k) {
+        headersText += k + ': ' + evt.req_headers[k] + '\n';
+      });
+    }
+    $('#resendHeaders').value = headersText;
+    // Body（尝试 JSON 格式化）
+    var bodyText = evt.req_body || '';
+    if (bodyText) {
+      try { bodyText = JSON.stringify(JSON.parse(bodyText), null, 2); } catch(e) {}
+    }
+    $('#resendBody').value = bodyText;
+    // 隐藏上次响应
+    $('#resendResponse').style.display = 'none';
+    $('#resendStatus').textContent = '';
+  }
+
+  async function doResend() {
+    var method = $('#resendMethod').value;
+    var url = $('#resendURL').value.trim();
+    if (!url) { $('#resendStatus').textContent = 'URL is required'; return; }
+
+    // 解析 headers 文本
+    var headers = {};
+    var headerLines = $('#resendHeaders').value.split('\n');
+    headerLines.forEach(function(line) {
+      var idx = line.indexOf(':');
+      if (idx > 0) {
+        var k = line.substring(0, idx).trim();
+        var v = line.substring(idx + 1).trim();
+        if (k) headers[k] = v;
+      }
+    });
+
+    var body = $('#resendBody').value;
+    $('#resendStatus').textContent = 'Sending...';
+    $('#resendResponse').style.display = 'none';
+
+    try {
+      var result = await api.replayRequest(method, url, headers, body);
+      if (result.error) {
+        $('#resendStatus').textContent = 'Error: ' + result.error;
+        return;
+      }
+      $('#resendStatus').textContent = 'Done (' + (result.latency_ms || 0) + 'ms)';
+      $('#resendRespStatus').textContent = '(' + result.status + ')';
+      // 格式化响应体
+      var respBodyStr = result.body || '';
+      try { respBodyStr = JSON.stringify(JSON.parse(respBodyStr), null, 2); } catch(e) {}
+      $('#resendRespBody').textContent = respBodyStr;
+      $('#resendResponse').style.display = '';
+    } catch (e) {
+      $('#resendStatus').textContent = 'Error: ' + e.message;
+    }
+  }
+
   function initReqFilters() {
     ['reqFilterType', 'reqFilterScript', 'reqFilterRuleType', 'reqFilterStatus'].forEach(function (id) {
       var el = $('#' + id);
@@ -1042,12 +1121,40 @@
       });
     }
 
+    // Resend 按钮
+    var btnResend = $('#btnReqResend');
+    if (btnResend) {
+      btnResend.addEventListener('click', function () { showResendEditor(); });
+    }
+
+    // Resend Cancel
+    var btnResendCancel = $('#btnResendCancel');
+    if (btnResendCancel) {
+      btnResendCancel.addEventListener('click', function () {
+        $('#reqResendView').style.display = 'none';
+        $('#reqNormalView').style.display = '';
+        $('#reqDetailTabs').style.display = '';
+        $('#btnReqResend').style.display = '';
+      });
+    }
+
+    // Resend Send
+    var btnResendSend = $('#btnResendSend');
+    if (btnResendSend) {
+      btnResendSend.addEventListener('click', function () { doResend(); });
+    }
+
     var btnCloseDetail = $('#btnReqDetailClose');
     if (btnCloseDetail) {
       btnCloseDetail.addEventListener('click', function () {
         var panel = $('#reqDetailPanel');
         if (panel) panel.style.display = 'none';
         state.reqDetailId = null;
+        // Reset to normal view
+        $('#reqResendView').style.display = 'none';
+        $('#reqNormalView').style.display = '';
+        $('#reqDetailTabs').style.display = '';
+        $('#btnReqResend').style.display = '';
         $$('#reqBody tr').forEach(function (tr) { tr.classList.remove('req-selected'); });
       });
     }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
 )
@@ -197,7 +198,7 @@ func matchStatusFilter(status int, filter string) bool {
 }
 
 // RegisterRoutes 注册 Web UI 路由
-func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *EventBroadcaster, statusProvider StatusProvider, debugger *script.Debugger) {
+func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *EventBroadcaster, statusProvider StatusProvider, debugger *script.Debugger, replayer replay.Replayer) {
 	// 静态资源（embed.FS）
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -484,6 +485,34 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 			})
 		}
 		c.JSON(http.StatusOK, gin.H{"scripts": result})
+	})
+
+	// 请求重放：通过代理重新发送编辑后的请求（MITM → 规则匹配 → JS 脚本全部生效）
+	engine.POST("/api/replay", func(c *gin.Context) {
+		if replayer == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "replay is not configured"})
+			return
+		}
+		var req replay.Request
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if req.URL == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "url is required"})
+			return
+		}
+		if req.Method == "" {
+			req.Method = "GET"
+		}
+
+		resp, err := replayer.Replay(c.Request.Context(), req)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusOK, resp)
 	})
 
 	log.Printf("[WebUI] Registered at /ui/ (SSE at /api/events)")

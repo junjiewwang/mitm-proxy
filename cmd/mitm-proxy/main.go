@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 
+	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
 	"mitm-proxy/webui"
@@ -227,8 +228,13 @@ func main() {
 	if fwdProxy != nil {
 		connMgr = fwdProxy.ConnMgr
 	}
+	replayer, err := replay.NewProxyReplayer(cfg.Proxy.Listen)
+	if err != nil {
+		log.Printf("[Main] WARNING: replay disabled: %v", err)
+		replayer = nil
+	}
 	webui.RegisterRoutes(ginEngine, ruleManager, eventBroadcaster,
-		&proxyStatusProvider{collector: defaultCollector, connMgr: connMgr, cfg: cfg}, debugger)
+		&proxyStatusProvider{collector: defaultCollector, connMgr: connMgr, cfg: cfg}, debugger, replayer)
 
 	// 诊断面板 + MCP Server
 	if fwdProxy != nil {

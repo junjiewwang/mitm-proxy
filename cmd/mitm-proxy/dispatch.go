@@ -170,8 +170,12 @@ func (d *processorDispatcher) broadcastEvent(req *http.Request, reqBody []byte, 
 		}
 	}
 
+	eventType := "match"
+	if req.Header.Get("X-Replay") == "true" {
+		eventType = "replay"
+	}
 	d.broadcaster.Broadcast(&webui.Event{
-		Type:          "match",
+		Type:          eventType,
 		Time:          time.Now().Format(time.RFC3339),
 		Method:        req.Method,
 		URL:           req.URL.String(),

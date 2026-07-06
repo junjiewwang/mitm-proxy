@@ -122,6 +122,7 @@
         <select id="reqFilterType">
           <option value="">All Types</option>
           <option value="match">Match</option>
+          <option value="replay">Replay</option>
           <option value="forward">Forward</option>
           <option value="tunnel">Tunnel</option>
           <option value="error">Error</option>
@@ -174,17 +175,50 @@
     <div class="req-detail-panel" id="reqDetailPanel" style="display:none">
       <div class="req-detail-header">
         <span class="req-detail-title" id="reqDetailTitle">Request Detail</span>
-        <div class="req-detail-tabs">
+        <div class="req-detail-tabs" id="reqDetailTabs">
           <button class="req-dtab active" data-dtab="overview">Overview</button>
           <button class="req-dtab" data-dtab="request">Request</button>
           <button class="req-dtab" data-dtab="response">Response</button>
         </div>
+        <button class="btn btn-sm" id="btnReqResend" title="Edit &amp; Resend">↻ Resend</button>
         <button class="btn btn-sm" id="btnReqDetailClose">✕</button>
       </div>
       <div class="req-detail-body">
-        <div class="req-dtab-content active" id="dt-Overview"></div>
-        <div class="req-dtab-content" id="dt-Request"></div>
-        <div class="req-dtab-content" id="dt-Response"></div>
+        <!-- Normal tabs -->
+        <div id="reqNormalView">
+          <div class="req-dtab-content active" id="dt-Overview"></div>
+          <div class="req-dtab-content" id="dt-Request"></div>
+          <div class="req-dtab-content" id="dt-Response"></div>
+        </div>
+        <!-- Resend editor (hidden by default) -->
+        <div id="reqResendView" style="display:none">
+          <div class="resend-form">
+            <div class="resend-row">
+              <select id="resendMethod" class="resend-method">
+                <option>GET</option><option selected>POST</option><option>PUT</option>
+                <option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
+              </select>
+              <input type="text" id="resendURL" class="resend-url" placeholder="https://example.com/api">
+            </div>
+            <div class="resend-section">
+              <h4>Headers</h4>
+              <textarea id="resendHeaders" class="resend-textarea resend-headers" rows="5" placeholder="Content-Type: application/json&#10;Authorization: Bearer xxx"></textarea>
+            </div>
+            <div class="resend-section">
+              <h4>Body</h4>
+              <textarea id="resendBody" class="resend-textarea resend-body" rows="10" placeholder='{"key": "value"}'></textarea>
+            </div>
+            <div class="resend-actions">
+              <button class="btn btn-sm" id="btnResendCancel">Cancel</button>
+              <button class="btn btn-primary btn-sm" id="btnResendSend">▶ Send</button>
+              <span class="resend-status" id="resendStatus"></span>
+            </div>
+            <div class="resend-response" id="resendResponse" style="display:none">
+              <h4>Response <span id="resendRespStatus"></span></h4>
+              <pre id="resendRespBody"></pre>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </section>
