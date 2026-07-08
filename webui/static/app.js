@@ -15,7 +15,9 @@
     requests: [],
     reqPaused: false,
     reqDetailId: null,
-    clearedAt: null,        // Clear 时记录时间戳，过滤旧数据
+    clearedAt: null,
+    treeView: true,           // 树状分组视图
+    treeGroups: {},           // {hostname: {rows: [], expanded: true}}
     lastErrors: [],
     lastWarnings: [],
   };
@@ -171,6 +173,15 @@
 
   function tryFormatJSON(str) {
     try { return JSON.stringify(JSON.parse(str), null, 2); } catch(e) { return str; }
+  }
+
+  function extractHostname(url) {
+    if (!url) return '(unknown)';
+    try {
+      var a = document.createElement('a');
+      a.href = url;
+      return a.hostname || '(unknown)';
+    } catch(e) { return '(unknown)'; }
   }
 
   function fmtUptime(sec) {
@@ -712,8 +723,47 @@
 
     state.requests.unshift(evt);
     if (state.requests.length > 500) state.requests = state.requests.slice(0, 500);
-    appendReqRow(evt, true);
+
+    if (state.treeView) {
+      insertReqRowIntoTree(evt);
+    } else {
+      appendReqRow(evt, true);
+    }
     updateReqCount();
+  }
+
+  // 将新请求插入到对应分组的组头之后
+  function insertReqRowIntoTree(evt) {
+    var tbody = $('#reqBody');
+    if (!tbody) return;
+    var host = extractHostname(evt.url);
+    var header = document.querySelector('.tree-group-header[data-tree-host="' + host + '"]');
+
+    if (header) {
+      // 找到该组的最后一行（紧跟 header 的连续 .tree-group-row 们）
+      var after = header.nextElementSibling;
+      while (after && after.classList.contains('tree-group-row') && after.dataset.treeHost === host) {
+        after = after.nextElementSibling;
+      }
+      // 标记行属于该分组
+      appendReqRow(evt, false);
+      var tr = tbody.lastChild;
+      tr.classList.add('tree-group-row');
+      tr.dataset.treeHost = host;
+      var group = state.treeGroups[host];
+      if (group && group.expanded !== false) tr.classList.add('expanded');
+      // 移到正确位置（header 之后、下一组之前）
+      tbody.insertBefore(tr, after);
+    } else {
+      // 新域名：创建新分组放在最前
+      var placeholder = tbody.firstChild;
+      appendReqRow(evt, false);
+      var tr2 = tbody.lastChild;
+      tr2.classList.add('tree-group-row');
+      tr2.dataset.treeHost = host;
+      // 简化：暂不创建 header，避免复杂 DOM 操作；fallback 到 prepend
+      tbody.insertBefore(tr2, tbody.firstChild);
+    }
   }
 
   function reqMatchesFilter(evt) {
@@ -734,7 +784,7 @@
     return true;
   }
 
-  function appendReqRow(evt, prepend) {
+  function appendReqRow(evt, prepend, beforeNode) {
     var tbody = $('#reqBody');
     if (!tbody) return;
     var tr = document.createElement('tr');
@@ -763,13 +813,15 @@
     tr.dataset.idx = idx;
     tr.addEventListener('click', function () { showReqDetail(idx); });
     tr.style.cursor = 'pointer';
-    if (prepend) {
+    if (beforeNode) {
+      tbody.insertBefore(tr, beforeNode);
+    } else if (prepend) {
       tbody.insertBefore(tr, tbody.firstChild);
-      // 保持最多 500 行
-      while (tbody.children.length > 500) tbody.removeChild(tbody.lastChild);
     } else {
       tbody.appendChild(tr);
     }
+    // 保持最多 500 行
+    while (tbody.children.length > 500) tbody.removeChild(tbody.lastChild);
   }
 
   function updateReqCount() {
@@ -902,15 +954,105 @@
       return;
     }
 
-    state.requests.forEach(function (evt, i) {
-      appendReqRow(evt, false);
-      if (state.reqDetailId === i) {
-        var tr = tbody.lastChild;
-        if (tr) tr.classList.add('req-selected');
-      }
-    });
+    if (state.treeView) {
+      renderTreeView(tbody);
+    } else {
+      state.requests.forEach(function (evt, i) {
+        appendReqRow(evt, false);
+        if (state.reqDetailId === i) {
+          var tr = tbody.lastChild;
+          if (tr) tr.classList.add('req-selected');
+        }
+      });
+    }
 
     updateReqCount();
+  }
+
+  function renderTreeView(tbody) {
+    // 按 hostname 分组（保持首次出现顺序）
+    var groups = {};
+    var hostOrder = [];
+    state.requests.forEach(function(evt, i) {
+      var host = extractHostname(evt.url);
+      if (!groups[host]) { groups[host] = []; hostOrder.push(host); }
+      groups[host].push(i);
+    });
+
+    // 计算并存储分组信息
+    state.treeGroups = {};
+
+    hostOrder.forEach(function(host) {
+      var indices = groups[host];
+      var totalMs = 0, count = indices.length;
+      indices.forEach(function(i) { totalMs += state.requests[i].latency_ms || 0; });
+      var avgMs = Math.round(totalMs / count);
+
+      // 恢复上次折叠状态（默认全部展开）
+      var expanded = !state.treeGroups[host] || state.treeGroups[host].expanded !== false;
+
+      // 渲染组头（用 DOM API 而非 innerHTML 避免销毁后续行的 click handler）
+      var headerTr = document.createElement('tr');
+      headerTr.className = 'tree-group-header';
+      headerTr.dataset.treeHost = host;
+      var toggleIcon = document.createElement('span');
+      toggleIcon.className = 'tree-toggle';
+      toggleIcon.textContent = expanded ? '▼' : '▶';
+      var hostSpan = document.createElement('span');
+      hostSpan.className = 'tree-host';
+      hostSpan.textContent = host;
+      var countSpan = document.createElement('span');
+      countSpan.className = 'tree-meta';
+      countSpan.textContent = '(' + count + ')';
+      var avgSpan = document.createElement('span');
+      avgSpan.className = 'tree-meta';
+      avgSpan.style.marginLeft = '12px';
+      avgSpan.textContent = 'avg ' + avgMs + 'ms';
+      var td = document.createElement('td');
+      td.colSpan = 11;
+      td.appendChild(toggleIcon);
+      td.appendChild(document.createTextNode(' '));
+      td.appendChild(hostSpan);
+      td.appendChild(document.createTextNode(' '));
+      td.appendChild(countSpan);
+      td.appendChild(avgSpan);
+      headerTr.appendChild(td);
+
+      // 绑定折叠事件（在 appendChild 之后立即绑定，保留 handler）
+      headerTr.addEventListener('click', function() {
+        toggleGroup(host);
+      });
+
+      tbody.appendChild(headerTr);
+
+      // 渲染组内行（appendReqRow 已用 appendChild，handler 不会丢失）
+      indices.forEach(function(idx) {
+        appendReqRow(state.requests[idx], false);
+        var tr = tbody.lastChild;
+        tr.classList.add('tree-group-row');
+        tr.dataset.treeHost = host;
+        if (expanded) tr.classList.add('expanded');
+        if (state.reqDetailId === idx) tr.classList.add('req-selected');
+      });
+
+      state.treeGroups[host] = { expanded: expanded };
+    });
+  }
+
+  function toggleGroup(host) {
+    var expanded = !state.treeGroups[host].expanded;
+    state.treeGroups[host].expanded = expanded;
+
+    // 更新 header 图标
+    var header = document.querySelector('.tree-group-header[data-tree-host="' + host + '"]');
+    if (header) {
+      var toggle = header.querySelector('.tree-toggle');
+      if (toggle) toggle.textContent = expanded ? '▼' : '▶';
+    }
+    // 更新组内行
+    document.querySelectorAll('.tree-group-row[data-tree-host="' + host + '"]').forEach(function(tr) {
+      tr.classList.toggle('expanded', expanded);
+    });
   }
 
   function truncateHtml(html, maxLen) {
@@ -1092,6 +1234,17 @@
           state.clearedAt = null;
           loadRequests();
         }, 300);
+      });
+    }
+
+    var btnTree = $('#btnReqTree');
+    if (btnTree) {
+      btnTree.classList.toggle('active', state.treeView);
+      btnTree.addEventListener('click', function () {
+        state.treeView = !state.treeView;
+        this.classList.toggle('active', state.treeView);
+        this.textContent = state.treeView ? '📂 Tree' : '📋 Flat';
+        loadRequests();
       });
     }
 

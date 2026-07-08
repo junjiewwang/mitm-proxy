@@ -771,3 +771,32 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
   max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all;
 }
 
+/* Tree view */
+.tree-group-header {
+  background: var(--bg-tertiary); cursor: pointer; user-select: none;
+  border-bottom: 1px solid var(--border);
+}
+.tree-group-header:hover { background: var(--bg-hover); }
+.tree-group-header td {
+  padding: 5px 8px; font-size: 12px; font-weight: 500; color: var(--text-primary);
+  border-bottom: none;
+}
+.tree-group-header .tree-toggle {
+  display: inline-block; width: 16px; margin-right: 4px; color: var(--text-secondary); text-align: center;
+}
+.tree-group-header .tree-host {
+  color: var(--accent); font-family: var(--font-mono);
+}
+.tree-group-header .tree-meta {
+  font-size: 11px; color: var(--text-muted); margin-left: 8px;
+}
+.tree-group-row { display: none; }
+.tree-group-row.expanded { display: table-row; }
+
+/* Tree toggle button active state */
+#btnReqTree.active {
+  background: rgba(88, 166, 255, 0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
