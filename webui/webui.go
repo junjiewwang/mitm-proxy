@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"mitm-proxy/core/event"
+	"mitm-proxy/core/ca"
 	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
@@ -181,7 +182,7 @@ func matchStatusFilter(status int, filter string) bool {
 }
 
 // RegisterRoutes 注册 Web UI 路由
-func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *EventBroadcaster, statusProvider StatusProvider, debugger *script.Debugger, replayer replay.Replayer) {
+func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *EventBroadcaster, statusProvider StatusProvider, debugger *script.Debugger, replayer replay.Replayer, caManager *ca.Manager) {
 	// 静态资源（embed.FS）
 	staticSub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -496,6 +497,42 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 		}
 
 		c.JSON(http.StatusOK, resp)
+	})
+
+	// CA 管理 API
+	engine.GET("/api/ca/status", func(c *gin.Context) {
+		if caManager == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CA not loaded"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"fingerprint": caManager.Fingerprint(),
+			"stores":      caManager.CheckTrust(),
+		})
+	})
+	engine.GET("/api/ca/download", func(c *gin.Context) {
+		if caManager == nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "CA not loaded"})
+			return
+		}
+		format := c.Query("format")
+		switch format {
+		case "mobileconfig":
+			data, err := caManager.MobileConfig()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.Header("Content-Type", "application/x-apple-aspen-config")
+			c.Header("Content-Disposition", "attachment; filename=mitm-proxy-ca.mobileconfig")
+			c.Data(http.StatusOK, "application/x-apple-aspen-config", data)
+		case "crt":
+			c.Header("Content-Type", "application/x-x509-ca-cert")
+			c.Header("Content-Disposition", "attachment; filename=mitm-proxy-ca.crt")
+			c.Data(http.StatusOK, "application/x-x509-ca-cert", caManager.PEM())
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid format, use mobileconfig or crt"})
+		}
 	})
 
 	log.Printf("[WebUI] Registered at /ui/ (SSE at /api/events)")
