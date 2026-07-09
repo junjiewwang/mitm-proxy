@@ -217,7 +217,7 @@
         $$('.tab-content').forEach(c => c.classList.remove('active'));
         this.classList.add('active');
         $('#tab-' + target).classList.add('active');
-        if (target === 'status') { refreshStatus(); refreshDiagnostics(); }
+        if (target === 'status') { refreshStatus(); refreshDiagnostics(); refreshCAStatus(); }
         if (target === 'debug') initDebugTab();
         if (target === 'requests') { initRequestsTab(); loadRequests(); }
       });
@@ -1326,6 +1326,42 @@
   }
 
 // ========== Status Tab ==========
+  async function refreshCAStatus() {
+    try {
+      var resp = await fetch('/api/ca/status');
+      var data = await resp.json();
+      if (data.error) {
+        $('#caStatusBody').innerHTML = '<span style="color:var(--text-muted)">CA not configured</span>';
+        return;
+      }
+      var html = '<div class="ca-fp">Fingerprint: ' + escapeHtml(data.fingerprint) + '</div>';
+      var allTrusted = true;
+      var someTrusted = false;
+      (data.stores || []).forEach(function(s) {
+        var icon = s.trusted ? '🟢' : '🔴';
+        var action = '';
+        if (!s.trusted) {
+          allTrusted = false;
+          action = ' <a class="ca-link" href="/api/ca/download?format=mobileconfig">📥 mobileconfig</a>';
+          action += ' <a class="ca-link" href="/api/ca/download?format=crt">📄 .crt</a>';
+        } else {
+          someTrusted = true;
+        }
+        html += '<div class="ca-store">' + icon + ' ' + escapeHtml(s.name) + ': ' +
+          (s.trusted ? '✓ Trusted' : '✗ ' + escapeHtml(s.error || 'Not installed')) +
+          action + '</div>';
+      });
+      if (allTrusted && someTrusted) {
+        html += '<div class="ca-ok">✅ All clear — HTTPS interception works in all browsers</div>';
+      } else {
+        html += '<div class="ca-hint">💡 Download the mobileconfig file → double-click → approve to install CA.</div>';
+      }
+      $('#caStatusBody').innerHTML = html;
+    } catch(e) {
+      $('#caStatusBody').innerHTML = '<span style="color:var(--text-muted)">CA status unavailable</span>';
+    }
+  }
+
   async function refreshStatus() {
     try {
       const status = await api.getStatus();
