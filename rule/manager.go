@@ -61,6 +61,7 @@ func NewRuleManager(cfg ManagerConfig, engine *RuleEngine) *RuleManager {
 }
 
 // disabledMarkerPath 返回禁用标记文件路径：{dir}/.{id}.disabled
+// NOCA:path_traversal(gin :id 路由限制 id 不包含 /，且 Create 时经 sanitizeID 处理)
 func (m *RuleManager) disabledMarkerPath(id string) string {
 	return filepath.Join(m.dir, "."+id+".disabled")
 }

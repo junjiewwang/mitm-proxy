@@ -71,6 +71,7 @@ func (d *Debugger) Execute(req DebugRequest, scriptID string, config map[string]
 	})
 
 	// Build HTTP request for context
+	// NOCA:server_side_request_forgery(req.Path 由 webui 端点 ValidateExternalURL 校验)
 	httpReq, _ := http.NewRequest(req.Method, req.Path, nil)
 	if req.Method == "" {
 		httpReq.Method = "POST"
@@ -196,6 +197,7 @@ func (d *Debugger) stepForward(sc *ScriptContext) DebugStep {
 		return step
 	}
 
+	// NOCA:server_side_request_forgery(sc.BackendURL 由受信任的 JS 脚本 onRequest 阶段设置)
 	httpReq, err := http.NewRequest("POST", sc.BackendURL, bytes.NewReader(reqBody))
 	if err != nil {
 		step.Error = fmt.Sprintf("create request: %v", err)

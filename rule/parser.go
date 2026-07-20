@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"mitm-proxy/core/security"
 )
 
 // Parser 规则文件解析器（Whistle 兼容扩展语法）
@@ -85,6 +87,11 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 			scriptName, isExternal, externalPath := p.parseScriptHeader(line)
 			if isExternal {
 				// @script name file://path — 引用外部 JS 文件
+				// 路径遍历防护：拒绝含 ../ 的路径
+				if _, err := security.SanitizePath("", externalPath); err != nil {
+					errors = append(errors, ParseError{Line: lineNo, Column: 1, Severity: "error", Message: fmt.Sprintf("path traversal blocked: %v", err), Raw: line})
+					continue
+				}
 				extSource, err := os.ReadFile(externalPath)
 				if err != nil {
 					errors = append(errors, ParseError{Line: lineNo, Column: 1, Severity: "error", Message: fmt.Sprintf("read external script: %v", err), Raw: line})
