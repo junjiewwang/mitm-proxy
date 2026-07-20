@@ -18,6 +18,7 @@ import (
 	"mitm-proxy/core/ca"
 	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
+	"mitm-proxy/core/security"
 	"mitm-proxy/rule"
 )
 
@@ -297,6 +298,11 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 		matched := false
 		engine := manager.GetEngine()
 		if engine != nil && req.Path != "" {
+			// SSRF 防护：调试端点允许内网（dry run），仅校验 scheme
+			if err := security.RequireExternal(req.Path); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid path: " + err.Error()})
+				return
+			}
 			// 构建假请求用于规则匹配
 			fakeReq, _ := http.NewRequest(req.Method, req.Path, nil)
 			if fakeReq == nil {

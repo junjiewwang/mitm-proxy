@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"mitm-proxy/core/security"
 )
 
 // Request 重放请求参数
@@ -64,6 +66,10 @@ func NewProxyReplayer(proxyAddr string) (*ProxyReplayer, error) {
 func (r *ProxyReplayer) Replay(ctx context.Context, req Request) (*Response, error) {
 	if req.URL == "" {
 		return nil, fmt.Errorf("url is required")
+	}
+	// SSRF 防护：拒绝内网地址和非 http/https scheme
+	if err := security.ValidateExternalURL(req.URL); err != nil {
+		return nil, err
 	}
 	if req.Method == "" {
 		req.Method = "GET"
