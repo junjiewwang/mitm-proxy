@@ -11,13 +11,27 @@ import (
 	"mitm-proxy/core/proxy"
 )
 
+// HostsConflict 记录一条 hosts 覆盖冲突信息（供诊断和 WebUI 使用）
+type HostsConflict struct {
+	Domain       string `json:"domain"`        // 冲突的域名
+	WinnerIP     string `json:"winner_ip"`     // 最终生效的 IP:port
+	WinnerScript string `json:"winner_script"` // 最终生效来源脚本 ID
+	WinnerLine   int    `json:"winner_line"`   // 最终生效来源行号
+	LoserIP      string `json:"loser_ip"`      // 被覆盖的 IP:port
+	LoserScript  string `json:"loser_script"`  // 被覆盖来源脚本 ID
+	LoserLine    int    `json:"loser_line"`    // 被覆盖来源行号
+}
+
 // RuleEngine 规则匹配引擎（线程安全，支持热更新）
 // 实现 proxy.InterceptMatcher + proxy.UpstreamResolver + proxy.RequestMatcher
 type RuleEngine struct {
-	mu           sync.RWMutex
-	scripts      []*RuleScript       // 按 priority 降序排列
-	interceptSet map[string]bool     // 合并后的 MITM 域名集
-	hostsMap     map[string]string   // 合并后的 hosts 映射（domain → ip:port）
+	mu             sync.RWMutex
+	scripts        []*RuleScript     // 按 priority 降序排列
+	interceptSet   map[string]bool   // 合并后的 MITM 域名集
+	hostsMap       map[string]string // 合并后的 hosts 映射（domain → ip:port）
+
+	// 上一次编译时检测到的 hosts 冲突列表（供诊断 API 使用）
+	hostsConflicts []HostsConflict
 }
 
 // NewRuleEngine 创建规则引擎
@@ -57,7 +71,17 @@ func (e *RuleEngine) Compile(scripts []*RuleScript) {
 	e.interceptSet = interceptSet
 
 	// 合并 hosts 映射（高优先级覆盖低优先级）
+	// 同时检测跨脚本（或同脚本内）的冲突
 	hostsMap := make(map[string]string)
+	// hostsSource 记录每个域名的来源信息：domain → (IP, scriptID, line)
+	type hostsEntry struct {
+		ip       string
+		scriptID string
+		line     int
+	}
+	hostsSource := make(map[string]hostsEntry)
+	var conflicts []HostsConflict
+
 	// 从低优先级到高优先级遍历，高优先级覆盖
 	for i := len(sorted) - 1; i >= 0; i-- {
 		for _, rule := range sorted[i].Rules {
@@ -67,12 +91,41 @@ func (e *RuleEngine) Compile(scripts []*RuleScript) {
 					addr += ":443"
 				}
 				for _, domain := range rule.Domains {
+					if prev, exists := hostsSource[domain]; exists {
+						conflicts = append(conflicts, HostsConflict{
+							Domain:       domain,
+							WinnerIP:     addr,
+							WinnerScript: sorted[i].ID,
+							WinnerLine:   rule.Line,
+							LoserIP:      prev.ip,
+							LoserScript:  prev.scriptID,
+							LoserLine:    prev.line,
+						})
+					}
 					hostsMap[domain] = addr
+					hostsSource[domain] = hostsEntry{ip: addr, scriptID: sorted[i].ID, line: rule.Line}
 				}
 			}
 		}
 	}
 	e.hostsMap = hostsMap
+	e.hostsConflicts = conflicts
+
+	// 输出冲突日志（仅在存在冲突时打印）
+	if len(conflicts) > 0 {
+		log.Printf("[RuleEngine] ⚠ %d hosts conflict(s) detected:", len(conflicts))
+		for _, c := range conflicts {
+			if c.WinnerScript == c.LoserScript {
+				// 同脚本内的冲突
+				log.Printf("[RuleEngine]   %s: line %d (%s) overrides line %d (%s) [same script: %s]",
+					c.Domain, c.WinnerLine, c.WinnerIP, c.LoserLine, c.LoserIP, c.WinnerScript)
+			} else {
+				// 跨脚本的冲突
+				log.Printf("[RuleEngine]   %s: [%s:%d] %s → overrides → [%s:%d] %s",
+					c.Domain, c.WinnerScript, c.WinnerLine, c.WinnerIP, c.LoserScript, c.LoserLine, c.LoserIP)
+			}
+		}
+	}
 
 	// 统计日志：方便验证规则更新是否生效
 	totalRules := 0
@@ -112,6 +165,26 @@ func (e *RuleEngine) ResolveUpstream(hostname string) (string, bool) {
 		return addr, true
 	}
 	return "", false
+}
+
+// HostsSnapshot 返回当前生效的 hosts 映射快照（domain → ip:port），供 WebUI 和调试使用
+func (e *RuleEngine) HostsSnapshot() map[string]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	snapshot := make(map[string]string, len(e.hostsMap))
+	for k, v := range e.hostsMap {
+		snapshot[k] = v
+	}
+	return snapshot
+}
+
+// HostsConflicts 返回上一次编译时检测到的 hosts 冲突列表，供诊断 API 和 WebUI 使用
+func (e *RuleEngine) HostsConflicts() []HostsConflict {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	result := make([]HostsConflict, len(e.hostsConflicts))
+	copy(result, e.hostsConflicts)
+	return result
 }
 
 // Match 实现 proxy.RequestMatcher 接口

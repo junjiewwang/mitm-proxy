@@ -31,29 +31,54 @@ func listRules(m *rule.RuleManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		scripts := m.List()
 		type scriptInfo struct {
-			ID         string `json:"id"`
-			Name       string `json:"name"`
-			Priority   int    `json:"priority"`
-			Enabled    bool   `json:"enabled"`
-			RuleCount  int    `json:"rule_count"`
-			Intercepts int    `json:"intercept_count"`
-			TotalHits  int64  `json:"total_hits"`
-			HasError   bool   `json:"has_error"`
+			ID             string `json:"id"`
+			Name           string `json:"name"`
+			Priority       int    `json:"priority"`
+			Enabled        bool   `json:"enabled"`
+			RuleCount      int    `json:"rule_count"`
+			Intercepts     int    `json:"intercept_count"`
+			TotalHits      int64  `json:"total_hits"`
+			HasError       bool   `json:"has_error"`
+			WarningCount   int    `json:"warning_count"`
 		}
 		result := make([]scriptInfo, 0, len(scripts))
 		for _, s := range scripts {
+			errCount := 0
+			warnCount := 0
+			for _, pe := range s.ParseErrors {
+				if pe.Severity == "warning" {
+					warnCount++
+				} else {
+					errCount++
+				}
+			}
 			result = append(result, scriptInfo{
-				ID:         s.ID,
-				Name:       s.Name,
-				Priority:   s.Priority,
-				Enabled:    s.Enabled,
-				RuleCount:  len(s.Rules),
-				Intercepts: len(s.Intercepts),
-				TotalHits:  s.Stats.TotalHits,
-				HasError:   len(s.ParseErrors) > 0,
+				ID:           s.ID,
+				Name:         s.Name,
+				Priority:     s.Priority,
+				Enabled:      s.Enabled,
+				RuleCount:    len(s.Rules),
+				Intercepts:   len(s.Intercepts),
+				TotalHits:    s.Stats.TotalHits,
+				HasError:     errCount > 0,
+				WarningCount: warnCount,
 			})
 		}
-		c.JSON(http.StatusOK, gin.H{"scripts": result})
+
+		// 附加 hosts 冲突检测结果
+		eng := m.GetEngine()
+		hostsConflicts := make([]rule.HostsConflict, 0)
+		hostsCount := 0
+		if eng != nil {
+			hostsConflicts = eng.HostsConflicts()
+			hostsCount = len(eng.HostsSnapshot())
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"scripts":         result,
+			"hosts_conflicts": hostsConflicts,
+			"hosts_count":     hostsCount,
+		})
 	}
 }
 

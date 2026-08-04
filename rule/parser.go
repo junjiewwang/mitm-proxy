@@ -47,6 +47,9 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	lineNo := 0
 
+	// 同脚本内 hosts 域名去重检测：domain → (首次出现的行号, IP, 原始行内容)
+	seenHosts := make(map[string]struct{ line int; ip string; text string })
+
 	for scanner.Scan() {
 		lineNo++
 		rawLine := scanner.Text()
@@ -160,6 +163,32 @@ func (p *Parser) ParseContent(content string) (*RuleScript, []ParseError) {
 			errors = append(errors, ParseError{Line: lineNo, Column: col, Severity: "error", Message: err.Error(), Raw: line, Suggestion: sug})
 			continue
 		}
+
+		// 同脚本内 hosts 域名重复检测（warning 级别，不阻止加载）
+		// 仅当同一域名映射到不同 IP 时才视为冲突；相同 IP+域名只记录不告警
+		if rule.Type == RuleTypeHosts {
+			for _, domain := range rule.Domains {
+				if prev, exists := seenHosts[domain]; exists {
+					if prev.ip != rule.IP {
+						errors = append(errors, ParseError{
+							Line:        lineNo,
+							Column:      1,
+							Severity:    "warning",
+							Message:     fmt.Sprintf("duplicate hosts mapping for %q (first defined at line %d with IP %s, will be overridden by line %d with IP %s)", domain, prev.line, prev.ip, lineNo, rule.IP),
+							Raw:         rawLine,
+							Suggestion:  fmt.Sprintf("Remove the duplicate mapping for %s at line %d, or use separate rule scripts with @priority to manage precedence explicitly", domain, prev.line),
+							RelatedLine: prev.line,
+							RelatedText: prev.text,
+						})
+					}
+					// 更新为当前行（同域名覆盖语义：last-write-wins）
+					seenHosts[domain] = struct{ line int; ip string; text string }{line: lineNo, ip: rule.IP, text: rawLine}
+				} else {
+					seenHosts[domain] = struct{ line int; ip string; text string }{line: lineNo, ip: rule.IP, text: rawLine}
+				}
+			}
+		}
+
 		script.Rules = append(script.Rules, *rule)
 	}
 

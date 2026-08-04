@@ -163,7 +163,7 @@ func (m *RuleManager) StopHotReload() {
 	close(m.stopWatch)
 }
 
-// List 获取所有脚本列表（按优先级降序）
+// List 获取所有脚本列表（按优先级降序，同优先级按 ID 字母序升序，保证稳定排序）
 func (m *RuleManager) List() []*RuleScript {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -173,7 +173,10 @@ func (m *RuleManager) List() []*RuleScript {
 		result = append(result, s)
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Priority > result[j].Priority
+		if result[i].Priority != result[j].Priority {
+			return result[i].Priority > result[j].Priority
+		}
+		return result[i].ID < result[j].ID
 	})
 	return result
 }

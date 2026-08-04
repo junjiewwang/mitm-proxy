@@ -43,12 +43,14 @@ type Rule struct {
 
 // ParseError 解析错误（单行级别，不阻止其他行）
 type ParseError struct {
-	Line       int    `json:"line"`
-	Column     int    `json:"column"`
-	Severity   string `json:"severity,omitempty"`
-	Message    string `json:"message"`
-	Raw        string `json:"raw,omitempty"`
-	Suggestion string `json:"suggestion,omitempty"`
+	Line        int    `json:"line"`
+	Column      int    `json:"column"`
+	Severity    string `json:"severity,omitempty"`
+	Message     string `json:"message"`
+	Raw         string `json:"raw,omitempty"`
+	Suggestion  string `json:"suggestion,omitempty"`
+	RelatedLine int    `json:"related_line,omitempty"` // 关联行号（如重复定义首次出现的行）
+	RelatedText string `json:"related_text,omitempty"` // 关联行的原始内容
 }
 
 func (e *ParseError) Error() string {

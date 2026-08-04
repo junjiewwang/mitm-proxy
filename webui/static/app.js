@@ -26,8 +26,7 @@
   const api = {
     async listScripts() {
       const resp = await fetch('/api/rules');
-      const data = await resp.json();
-      return data.scripts || [];
+      return resp.json();
     },
     async getScriptContent(id) {
       const resp = await fetch(`/api/rules/${id}/content`);
@@ -307,7 +306,8 @@
   // ========== Script List ==========
   async function loadScripts() {
     try {
-      state.scripts = await api.listScripts();
+      const data = await api.listScripts();
+      state.scripts = data.scripts || [];
       renderScriptList();
       updateReqScriptFilter();
       updateDebugScriptSelector();
@@ -343,7 +343,9 @@
         '</div>' +
         '<div class="script-meta"><span class="script-badge ' + badgeCls + '">' + badgeText + '</span>' +
           '<span>P:' + s.priority + '</span><span>' + s.rule_count + ' rules</span>' +
-          '<span>' + s.intercept_count + ' intercepts</span></div>' +
+          '<span>' + s.intercept_count + ' int</span>' +
+          (s.warning_count > 0 ? '<span class="script-warn">⚠' + s.warning_count + '</span>' : '') +
+          '</div>' +
         '<div class="script-stats">Hits: ' + fmtNumber(s.total_hits) + '</div>';
 
       item.addEventListener('click', function (e) {
@@ -390,21 +392,32 @@
     $$('.script-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
     try {
       const data = await api.getScriptContent(id);
-      showEditor(id, data.content);
+      showEditor(id, data.content, data.parse_errors || [], data.parse_warnings || []);
     } catch (e) { toast('Failed to load script: ' + e.message, 'error'); }
   }
 
-  function showEditor(id, content) {
+  function showEditor(id, content, errors, warnings) {
     $('#editorPlaceholder').style.display = 'none';
     $('#editorContainer').style.display = 'flex';
     $('#editorActions').style.display = 'flex';
     $('#editorTitle').textContent = id;
     $('#editorTextarea').value = content || '';
-    state.lastErrors = [];
-    state.lastWarnings = [];
+    state.lastErrors = errors || [];
+    state.lastWarnings = warnings || [];
     updateLineNumbers();
     updateHighlightOverlay(content);
-    hideValidation();
+    // 自动显示脚本的解析错误/警告（如重复 hosts 映射）
+    if ((errors && errors.length > 0) || (warnings && warnings.length > 0)) {
+      showValidation({
+        valid: (errors || []).length === 0,
+        errors: errors || [],
+        warnings: warnings || [],
+        error_count: (errors || []).length,
+        warning_count: (warnings || []).length
+      });
+    } else {
+      hideValidation();
+    }
   }
 
   function showEditorPlaceholder() {
@@ -427,14 +440,14 @@
     const lineNumbers = $('#lineNumbers');
     if (!lineNumbers) return;
 
-    // 构建错误/警告行号集合
+    // 构建错误/警告行号集合（保存完整 issue 信息用于 tooltip）
     var errorLines = {};
     var warningLines = {};
     (state.lastErrors || []).forEach(function(e) {
-      if (e.line) errorLines[e.line] = e.message;
+      if (e.line) errorLines[e.line] = e;
     });
     (state.lastWarnings || []).forEach(function(w) {
-      if (w.line) warningLines[w.line] = w.message;
+      if (w.line) warningLines[w.line] = w;
     });
 
     let inConfig = false, inScript = false;
@@ -457,16 +470,16 @@
       else if (isIPLike(line.split(/\s+/)[0])) cls = 'ln-hosts';
 
       // 错误/警告标注优先级最高
-      var titleAttr = '';
+      var issueHtml = '';
       if (errorLines[lineNum]) {
         cls += ' ln-error';
-        titleAttr = ' title="' + escapeHtml(errorLines[lineNum]).replace(/"/g, '&quot;') + '"';
+        issueHtml = '<span class="ln-icon ln-icon-err" data-line="' + lineNum + '" data-issue="error" title="">⨯</span>';
       } else if (warningLines[lineNum]) {
         cls += ' ln-warning';
-        titleAttr = ' title="' + escapeHtml(warningLines[lineNum]).replace(/"/g, '&quot;') + '"';
+        issueHtml = '<span class="ln-icon ln-icon-warn" data-line="' + lineNum + '" data-issue="warning" title="">⚠</span>';
       }
 
-      numsHtml += '<span class="' + cls + '"' + titleAttr + '>' + lineNum + '</span>\n';
+      numsHtml += '<div class="ln-row ' + cls + '" data-line="' + lineNum + '">' + issueHtml + '<span class="ln-num">' + lineNum + '</span></div>';
       // 切换状态
       if (openingConfig) inConfig = true;
       else if (openingScript) inScript = true;
@@ -474,6 +487,117 @@
       else if (endScript) inScript = false;
     }
     lineNumbers.innerHTML = numsHtml;
+
+    // 为带图标的行号绑定 hover tooltip
+    bindLineNumberTooltips();
+  }
+
+  // bindLineNumberTooltips 绑定行号图标的 hover tooltip
+  function bindLineNumberTooltips() {
+    var lineNumbers = $('#lineNumbers');
+    if (!lineNumbers) return;
+
+    // 移除旧 tooltip
+    var oldTip = document.getElementById('lnTooltip');
+    if (oldTip) oldTip.remove();
+
+    // 创建共享 tooltip 元素
+    var tip = document.createElement('div');
+    tip.id = 'lnTooltip';
+    tip.className = 'ln-tooltip';
+    tip.style.display = 'none';
+    document.body.appendChild(tip);
+
+    var hideTimer = null;
+
+    function showTip(el) {
+      var lineNum = parseInt(el.dataset.line);
+      var issueType = el.dataset.issue;
+      var issue = issueType === 'error'
+        ? (state.lastErrors || []).find(function(e) { return e.line === lineNum; })
+        : (state.lastWarnings || []).find(function(w) { return w.line === lineNum; });
+      if (!issue) return;
+
+      var sevIcon = issueType === 'error' ? '⨯' : '⚠';
+      var sevCls = issueType === 'error' ? 'tip-error' : 'tip-warn';
+      var html = '<div class="tip-header ' + sevCls + '">';
+      html += '<span class="tip-sev">' + sevIcon + '</span>';
+      html += '<span>Line ' + lineNum + '</span>';
+      html += '</div>';
+      html += '<div class="tip-body">' + escapeHtml(issue.message) + '</div>';
+
+      if (issue.related_line) {
+        html += '<div class="tip-related">';
+        html += '<div class="tip-related-label">↪ conflicts with Line ' + issue.related_line + ':</div>';
+        if (issue.related_text) {
+          html += '<code class="tip-related-code">' + escapeHtml(issue.related_text) + '</code>';
+        }
+        html += '<button class="tip-jump-btn" data-jump-line="' + issue.related_line + '">Jump to Line ' + issue.related_line + ' →</button>';
+        html += '</div>';
+      }
+
+      if (issue.suggestion) {
+        html += '<div class="tip-sug">💡 ' + escapeHtml(issue.suggestion) + '</div>';
+      }
+
+      tip.innerHTML = html;
+      tip.style.display = 'block';
+
+      // 定位
+      var rect = el.getBoundingClientRect();
+      var tipRect = tip.getBoundingClientRect();
+      var top = rect.top - tipRect.height - 6;
+      if (top < 8) top = rect.bottom + 6; // 下方放不下就放下方
+      var left = rect.right + 8;
+      if (left + tipRect.width > window.innerWidth - 8) left = window.innerWidth - tipRect.width - 8;
+      tip.style.top = top + 'px';
+      tip.style.left = left + 'px';
+    }
+
+    function hideTip() {
+      if (hideTimer) clearTimeout(hideTimer);
+      hideTimer = setTimeout(function() {
+        tip.style.display = 'none';
+      }, 120);
+    }
+
+    lineNumbers.querySelectorAll('.ln-icon').forEach(function(icon) {
+      icon.addEventListener('mouseenter', function() { showTip(this); });
+      icon.addEventListener('mouseleave', hideTip);
+      // 点击图标直接跳转
+      icon.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var lineNum = parseInt(this.dataset.line);
+        if (!isNaN(lineNum)) {
+          jumpToLine(lineNum);
+          // 如果有 related_line，也跳过去
+          var issue = (this.dataset.issue === 'error'
+            ? (state.lastErrors || [])
+            : (state.lastWarnings || [])).find(function(i) { return i.line === lineNum; });
+          if (issue && issue.related_line) {
+            setTimeout(function() { jumpToLine(issue.related_line); }, 100);
+          }
+        }
+      });
+      // 鼠标移到 tooltip 上保持显示
+    });
+
+    // tooltip 自身 hover 不消失
+    tip.addEventListener('mouseenter', function() {
+      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    });
+    tip.addEventListener('mouseleave', hideTip);
+    // tooltip 内的 jump 按钮
+    tip.addEventListener('click', function(e) {
+      var btn = e.target.closest('.tip-jump-btn');
+      if (btn) {
+        var ln = parseInt(btn.dataset.jumpLine);
+        if (!isNaN(ln)) {
+          jumpToLine(ln);
+          tip.style.display = 'none';
+        }
+      }
+    });
   }
 
   function hideValidation() {
@@ -490,55 +614,110 @@
 
     var errorCount = result.error_count != null ? result.error_count : (result.errors || []).length;
     var warningCount = result.warning_count != null ? result.warning_count : (result.warnings || []).length;
+    var errors = result.errors || [];
+    var warnings = result.warnings || [];
 
-    if (result.valid) {
+    // 没有任何问题：显示纯成功态
+    if (errorCount === 0 && warningCount === 0) {
       bar.className = 'validation-bar clean';
-      bar.innerHTML = '<span class="v-icon">✓</span> Rules valid' +
-        (warningCount > 0 ? ' <span class="v-warn">(' + warningCount + ' warnings)</span>' : '');
-    } else {
-      bar.className = 'validation-bar invalid';
-      var html = '<div class="v-header"><span class="v-icon">✗</span>' +
-        errorCount + ' error(s), ' + warningCount + ' warning(s)</div>';
-      var issues = [];
-      (result.errors || []).forEach(function(e) { issues.push({severity: 'error', line: e.line, msg: e.message, sug: e.suggestion}); });
-      (result.warnings || []).forEach(function(w) { issues.push({severity: 'warning', line: w.line, msg: w.message, sug: w.suggestion}); });
-      // 按行号排序
-      issues.sort(function(a, b) { return a.line - b.line; });
-      issues.forEach(function(iss) {
-        var cls = iss.severity === 'error' ? 'v-err-item' : 'v-warn-item';
-        html += '<div class="' + cls + '" data-line="' + iss.line + '" style="cursor:pointer">' +
-          '<span class="v-sev">' + (iss.severity === 'error' ? '⨯' : '⚠') + '</span>' +
-          'Line ' + iss.line + ': ' + escapeHtml(iss.msg) +
-          (iss.sug ? '<div class="v-sug">💡 ' + escapeHtml(iss.sug) + '</div>' : '') +
-          '</div>';
-      });
-      bar.innerHTML = html;
-      // 点击错误项跳转到对应行
-      bar.querySelectorAll('[data-line]').forEach(function(el) {
-        el.addEventListener('click', function() {
-          var lineNum = parseInt(this.dataset.line);
-          var ta = $('#editorTextarea');
-          if (ta) {
-            var lines = ta.value.split('\n');
-            var pos = 0;
-            for (var i = 0; i < lineNum - 1 && i < lines.length; i++) {
-              pos += lines[i].length + 1;
-            }
-            ta.focus();
-            ta.setSelectionRange(pos, pos);
-            // 滚动到可见区域
-            var lineHeight = 21;
-            ta.scrollTop = (lineNum - 1) * lineHeight;
-            $('#lineNumbers').scrollTop = ta.scrollTop;
-          }
-        });
-      });
+      bar.innerHTML = '<span class="v-icon">✓</span> Rules valid — no issues';
+      var btnValidate = $('#btnValidate');
+      if (btnValidate) btnValidate.textContent = '✓ Validate';
+      return;
     }
+
+    // 有问题：始终显示完整列表（不再折叠）
+    bar.className = 'validation-bar issues';
+
+    var headerCls = errorCount > 0 ? 'v-header-error' : 'v-header-warn';
+    var icon = errorCount > 0 ? '⨯' : '⚠';
+    var summary = errorCount > 0
+      ? icon + ' ' + errorCount + ' error(s), ' + warningCount + ' warning(s)'
+      : icon + ' ' + warningCount + ' warning(s) — rules still valid but check duplicates';
+
+    var html = '<div class="v-header ' + headerCls + '">' + escapeHtml(summary) + '</div>';
+    html += '<div class="v-list">';
+
+    // 合并所有 issue 并按行号排序
+    var issues = [];
+    errors.forEach(function(e) { issues.push({severity: 'error', line: e.line, msg: e.message, sug: e.suggestion, related_line: e.related_line, related_text: e.related_text}); });
+    warnings.forEach(function(w) { issues.push({severity: 'warning', line: w.line, msg: w.message, sug: w.suggestion, related_line: w.related_line, related_text: w.related_text}); });
+    issues.sort(function(a, b) { return a.line - b.line; });
+
+    issues.forEach(function(iss) {
+      var cls = iss.severity === 'error' ? 'v-item-error' : 'v-item-warn';
+      var sevIcon = iss.severity === 'error' ? '⨯' : '⚠';
+      html += '<div class="v-item ' + cls + '" data-line="' + iss.line + '">';
+      html += '<span class="v-sev">' + sevIcon + '</span>';
+      html += '<span class="v-line">Line ' + iss.line + '</span>';
+      html += '<span class="v-msg">' + escapeHtml(iss.msg) + '</span>';
+
+      // 关联行：显示冲突行号 + 内容 + 跳转链接
+      if (iss.related_line) {
+        html += '<div class="v-related" data-jump-line="' + iss.related_line + '">';
+        html += '<span class="v-related-arrow">↪</span>';
+        html += '<span class="v-related-label">conflicts with Line ' + iss.related_line + ':</span>';
+        if (iss.related_text) {
+          html += '<code class="v-related-code">' + escapeHtml(iss.related_text) + '</code>';
+        }
+        html += '<button class="v-jump-btn" data-line="' + iss.related_line + '" title="跳转到 Line ' + iss.related_line + '">Jump →</button>';
+        html += '</div>';
+      }
+
+      if (iss.sug) {
+        html += '<div class="v-sug">💡 ' + escapeHtml(iss.sug) + '</div>';
+      }
+      html += '</div>';
+    });
+
+    html += '</div>';
+    bar.innerHTML = html;
+
+    // 绑定跳转事件（点击行号条目或 Jump 按钮）
+    bar.querySelectorAll('.v-item').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        if (e.target.closest('.v-jump-btn')) return; // Jump 按钮自己处理
+        jumpToLine(parseInt(this.dataset.line));
+      });
+    });
+    bar.querySelectorAll('.v-jump-btn').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        jumpToLine(parseInt(this.dataset.line));
+      });
+    });
 
     // 更新 Validate 按钮 badge
     var btnValidate = $('#btnValidate');
     if (btnValidate) {
-      btnValidate.textContent = (errorCount > 0 ? '✗ ' + errorCount : '✓') + ' Validate';
+      btnValidate.textContent = (errorCount > 0 ? '⨯ ' + errorCount : '⚠ ' + warningCount) + ' Validate';
+    }
+  }
+
+  // jumpToLine 通用跳转函数（编辑器聚焦 + 滚动 + 行号 gutter 高亮）
+  function jumpToLine(lineNum) {
+    var ta = $('#editorTextarea');
+    if (!ta) return;
+    var lines = ta.value.split('\n');
+    if (lineNum < 1 || lineNum > lines.length) return;
+    var pos = 0;
+    for (var i = 0; i < lineNum - 1 && i < lines.length; i++) {
+      pos += lines[i].length + 1;
+    }
+    ta.focus();
+    ta.setSelectionRange(pos, pos);
+    // 动态读取 textarea 实际行高（与 gutter 保持一致）
+    var lh = parseFloat(getComputedStyle(ta).lineHeight);
+    if (isNaN(lh) || lh <= 0) lh = 20.8; // fallback
+    // scrollTop 用同一行高：gutter 用 JS 同步 scrollTop 即可自然对齐
+    ta.scrollTop = Math.max(0, (lineNum - 3) * lh);
+    $('#lineNumbers').scrollTop = ta.scrollTop;
+    // 临时高亮行号 gutter
+    $$('#lineNumbers .ln-jump-flash').forEach(function(n) { n.classList.remove('ln-jump-flash'); });
+    var lineEl = $$('#lineNumbers .ln-row').find(function(n) { return parseInt(n.dataset.line) === lineNum; });
+    if (lineEl) {
+      lineEl.classList.add('ln-jump-flash');
+      setTimeout(function() { lineEl.classList.remove('ln-jump-flash'); }, 1500);
     }
   }
 

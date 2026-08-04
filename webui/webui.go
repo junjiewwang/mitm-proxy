@@ -267,9 +267,22 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "read file failed"})
 			return
 		}
+
+		// 分类 parse 错误/警告
+		var parseErrors, parseWarnings []rule.ParseError
+		for _, pe := range script.ParseErrors {
+			if pe.Severity == "warning" {
+				parseWarnings = append(parseWarnings, pe)
+			} else {
+				parseErrors = append(parseErrors, pe)
+			}
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"id":      id,
-			"content": string(content),
+			"id":             id,
+			"content":        string(content),
+			"parse_errors":   parseErrors,
+			"parse_warnings": parseWarnings,
 		})
 	})
 
@@ -406,6 +419,14 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 		result["proxy_events"] = toResult(proxyEvents)
 		result["script_events"] = toResult(scriptEvents)
 		result["recent_matches"] = toResult(append(proxyEvents, scriptEvents...))
+
+		// hosts 冲突检测结果
+		ruleEngine := manager.GetEngine()
+		if ruleEngine != nil {
+			conflicts := ruleEngine.HostsConflicts()
+			result["hosts_conflicts"] = conflicts
+			result["hosts_count"] = len(ruleEngine.HostsSnapshot())
+		}
 
 		c.JSON(http.StatusOK, result)
 	})

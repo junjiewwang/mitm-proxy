@@ -196,7 +196,7 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
   line-height: 1.6;
 }
 .line-numbers {
-  width: 44px; padding: 8px 4px;
+  width: 62px; padding: 8px 4px;
   background: var(--bg-tertiary);
   color: var(--text-muted);
   text-align: right;
@@ -207,8 +207,8 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
   font-family: var(--font-mono);
   border-right: 1px solid var(--border-light);
   flex-shrink: 0;
-  white-space: pre;
   box-sizing: border-box;
+  white-space: normal;  /* 不再需要 pre：每行 .ln-row 是 div 自然垂直堆叠 */
 }
 .line-numbers .ln-config { color: var(--yellow); }
 .line-numbers .ln-script { color: var(--accent); }
@@ -544,6 +544,9 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .diag-table .time-cell { color: var(--text-muted); font-size: 10px; }
 .diag-empty { text-align: center; color: var(--text-muted); padding: 20px; }
 
+/* ========== Script list warnings ========== */
+.script-warn { color: var(--yellow); font-weight: 600; }
+
 .diag-script-cards { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
 .diag-script-card {
   padding: 8px 12px; background: var(--bg-secondary);
@@ -714,23 +717,112 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
   background: rgba(63, 185, 80, 0.08);
   color: var(--green);
   border-top: 1px solid rgba(63, 185, 80, 0.2);
+  padding: 6px 12px;
 }
-.v-header { font-weight: 500; margin-bottom: 4px; }
+.validation-bar.issues {
+  max-height: 200px;
+  overflow-y: auto;
+  background: rgba(210, 153, 34, 0.04);
+  border-top: 1px solid rgba(210, 153, 34, 0.3);
+}
+.v-header { font-weight: 600; padding: 6px 12px; font-size: 12px; position: sticky; top: 0; background: inherit; border-bottom: 1px solid var(--border-light); z-index: 1; }
+.v-header-error { color: var(--red); }
+.v-header-warn { color: var(--yellow); }
 .v-icon { margin-right: 4px; }
 .v-warn { color: var(--yellow); margin-left: 4px; }
-.v-err-item {
-  padding: 3px 0; font-size: 11px; color: var(--red);
-  border-bottom: 1px solid rgba(248, 81, 73, 0.1);
+.v-list { padding: 4px 0; }
+.v-item {
+  padding: 6px 12px; font-size: 11px; cursor: pointer;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
-.v-warn-item {
-  padding: 3px 0; font-size: 11px; color: var(--yellow);
-  border-bottom: 1px solid rgba(210, 153, 34, 0.1);
+.v-item:hover { background: var(--bg-hover); }
+.v-item-error { border-left-color: var(--red); }
+.v-item-warn { border-left-color: var(--yellow); }
+.v-sev { display: inline-block; width: 16px; font-weight: bold; }
+.v-item-error .v-sev { color: var(--red); }
+.v-item-warn .v-sev { color: var(--yellow); }
+.v-line { color: var(--text-muted); margin-right: 6px; font-family: var(--font-mono); }
+.v-msg { color: var(--text-primary); }
+.v-related {
+  margin-top: 4px; margin-left: 22px; padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.03); border-radius: 3px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
 }
-.v-err-item:hover, .v-warn-item:hover { background: var(--bg-hover); }
-.v-sev { margin-right: 4px; font-weight: bold; }
+.v-related-arrow { color: var(--yellow); font-weight: bold; }
+.v-related-label { color: var(--text-secondary); font-size: 10px; }
+.v-related-code {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--text-primary); background: var(--bg-primary);
+  padding: 1px 6px; border-radius: 3px; flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.v-jump-btn {
+  background: var(--accent); color: white; border: none;
+  padding: 2px 8px; border-radius: 3px; font-size: 10px; cursor: pointer;
+  flex-shrink: 0;
+}
+.v-jump-btn:hover { background: var(--accent-hover, #3ea6ff); }
 .v-sug {
   font-size: 10px; color: var(--text-secondary);
-  padding: 2px 0 2px 16px;
+  padding: 2px 0 2px 22px; margin-top: 2px;
+}
+
+/* ========== Line number gutter: warning/error icons ========== */
+.ln-row {
+  display: flex; align-items: center; gap: 3px;
+  line-height: 1.6; padding-right: 4px;
+  /* 高度由 line-height 决定（13px × 1.6 = 20.8px），与 textarea 完全一致 */
+}
+.ln-num { flex: 1; }
+.ln-icon {
+  font-size: 10px; cursor: pointer; line-height: 1;
+  display: inline-block; width: 12px; text-align: center;
+}
+.ln-icon-err { color: var(--red); }
+.ln-icon-warn { color: var(--yellow); }
+.ln-icon:hover { transform: scale(1.3); }
+.ln-jump-flash {
+  background: var(--accent) !important; color: white !important;
+  border-radius: 3px; transition: background 0.3s;
+}
+
+/* ========== Line number hover tooltip ========== */
+.ln-tooltip {
+  position: fixed; z-index: 1000; max-width: 480px;
+  background: var(--bg-primary); border: 1px solid var(--border);
+  border-radius: 6px; padding: 8px 10px; font-size: 11px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  color: var(--text-primary); pointer-events: auto;
+}
+.ln-tooltip .tip-header {
+  display: flex; align-items: center; gap: 6px; font-weight: 600;
+  padding-bottom: 4px; border-bottom: 1px solid var(--border-light);
+  margin-bottom: 6px;
+}
+.ln-tooltip .tip-error { color: var(--red); }
+.ln-tooltip .tip-warn { color: var(--yellow); }
+.ln-tooltip .tip-sev { font-size: 14px; }
+.ln-tooltip .tip-body { color: var(--text-primary); line-height: 1.5; margin-bottom: 6px; }
+.ln-tooltip .tip-related {
+  margin: 6px 0; padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.04); border-radius: 4px;
+  border-left: 2px solid var(--yellow);
+}
+.ln-tooltip .tip-related-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 4px; }
+.ln-tooltip .tip-related-code {
+  display: block; font-family: var(--font-mono); font-size: 10px;
+  background: var(--bg-tertiary); padding: 4px 6px; border-radius: 3px;
+  color: var(--text-primary); margin-bottom: 4px; word-break: break-all;
+}
+.ln-tooltip .tip-jump-btn {
+  background: var(--accent); color: white; border: none;
+  padding: 3px 10px; border-radius: 3px; font-size: 11px; cursor: pointer;
+}
+.ln-tooltip .tip-jump-btn:hover { background: #3ea6ff; }
+.ln-tooltip .tip-sug {
+  font-size: 10px; color: var(--text-secondary); margin-top: 6px;
+  padding-top: 6px; border-top: 1px solid var(--border-light);
 }
 
 /* Resend editor */
