@@ -91,7 +91,8 @@ func (e *RuleEngine) Compile(scripts []*RuleScript) {
 					addr += ":443"
 				}
 				for _, domain := range rule.Domains {
-					if prev, exists := hostsSource[domain]; exists {
+					// 仅当同一域名映射到不同 IP 时才记录冲突；相同 IP 静默覆盖
+					if prev, exists := hostsSource[domain]; exists && prev.ip != addr {
 						conflicts = append(conflicts, HostsConflict{
 							Domain:       domain,
 							WinnerIP:     addr,
