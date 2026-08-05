@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"sync"
 	"time"
 
 	"github.com/dop251/goja"
@@ -36,7 +37,8 @@ type RuleScript struct {
 
 // ScriptStats 脚本运行时统计
 type ScriptStats struct {
-	TotalHits int64          // 总命中次数
+	mu        sync.Mutex     // 保护 RuleHits map 的并发写入
+	TotalHits int64          // 总命中次数（atomic）
 	LastHitAt time.Time      // 最后命中时间
 	RuleHits  map[int]int64  // 每条规则的命中次数（按行号索引）
 }

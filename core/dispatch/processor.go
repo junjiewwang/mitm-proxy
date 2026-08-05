@@ -2,9 +2,12 @@ package dispatch
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -173,10 +176,35 @@ func readAndReplaceBody(resp *http.Response) []byte {
 	if resp == nil || resp.Body == nil {
 		return nil
 	}
-	data, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	resp.Body = io.NopCloser(bytes.NewReader(data))
-	return data
+	// 设置 body 读取超时，防止上游 chunked 响应不完整导致永远阻塞
+	// 30s 与 pooledClient.Timeout 保持一致
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(resp.Body)
+		ch <- result{data, err}
+	}()
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			log.Printf("[Dispatch] readAndReplaceBody error: %v", r.err)
+		}
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(r.data))
+		return r.data
+	case <-ctx.Done():
+		log.Printf("[Dispatch] readAndReplaceBody timeout after 30s, aborting body read")
+		resp.Body.Close()
+		resp.Body = io.NopCloser(strings.NewReader(""))
+		return nil
+	}
 }
 
 func buildOpts(req *http.Request, reqBody []byte, resp *http.Response, respBody []byte, match *proxy.MatchResult, elapsed time.Duration) BuildOptions {

@@ -204,12 +204,14 @@ func (e *RuleEngine) Match(r *http.Request) (*proxy.MatchResult, bool) {
 			}
 
 			if result := e.matchRule(r, script, rule); result != nil {
-				// 更新统计
+				// 更新统计：TotalHits 用 atomic，RuleHits map 用 mutex 防并发写
 				atomic.AddInt64(&script.Stats.TotalHits, 1)
+				script.Stats.mu.Lock()
 				if script.Stats.RuleHits == nil {
 					script.Stats.RuleHits = make(map[int]int64)
 				}
 				script.Stats.RuleHits[rule.Line]++
+				script.Stats.mu.Unlock()
 				return result, true
 			}
 		}
