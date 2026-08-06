@@ -9,3 +9,5 @@ rules
 hosts.txt
 bin
 .codebuddy
+coverage.out
+coverage.html

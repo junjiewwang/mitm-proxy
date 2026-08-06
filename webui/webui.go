@@ -238,7 +238,7 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 				enabledCount++
 			}
 			totalRules += len(s.Rules)
-			totalHits += s.Stats.TotalHits
+			totalHits += s.Stats.Hits()
 		}
 		status["rules"] = map[string]interface{}{
 			"total_scripts":   len(scripts),
@@ -365,7 +365,7 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 		for _, s := range scripts {
 			if s.Enabled { enabledCount++ }
 			totalRules += len(s.Rules)
-			totalHits += s.Stats.TotalHits
+			totalHits += s.Stats.Hits()
 			scriptDetails = append(scriptDetails, map[string]interface{}{
 				"id":       s.ID,
 				"name":     s.Name,
@@ -374,7 +374,7 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 				"rules":    len(s.Rules),
 				"intercepts": len(s.Intercepts),
 				"has_js":   len(s.Scripts) > 0,
-				"hits":     s.Stats.TotalHits,
+				"hits":     s.Stats.Hits(),
 			})
 		}
 		result["scripts"] = scriptDetails

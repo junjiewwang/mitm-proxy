@@ -2,6 +2,7 @@ package rule
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dop251/goja"
@@ -41,4 +42,35 @@ type ScriptStats struct {
 	TotalHits int64          // 总命中次数（atomic）
 	LastHitAt time.Time      // 最后命中时间
 	RuleHits  map[int]int64  // 每条规则的命中次数（按行号索引）
+}
+
+// AdoptFrom 从 src 接管统计数据（热加载/重解析时保留命中计数）。
+// 必须用本方法而非 dst.Stats = src.Stats：后者会连 mu 一起按值拷贝，
+// 若拷贝时恰有请求持锁，新对象会得到一把已处于 locked 状态的互斥量。
+func (s *ScriptStats) AdoptFrom(src *ScriptStats) {
+	if s == src || src == nil {
+		return
+	}
+
+	src.mu.Lock()
+	total := atomic.LoadInt64(&src.TotalHits)
+	lastHit := src.LastHitAt
+	hits := make(map[int]int64, len(src.RuleHits))
+	for line, n := range src.RuleHits {
+		hits[line] = n
+	}
+	src.mu.Unlock()
+
+	s.mu.Lock()
+	atomic.StoreInt64(&s.TotalHits, total)
+	s.LastHitAt = lastHit
+	s.RuleHits = hits
+	s.mu.Unlock()
+}
+
+// Hits 原子读取总命中次数。
+// RuleEngine.Match 会用 atomic.AddInt64 并发递增 TotalHits，
+// 直接读字段会与之构成数据竞争，API/WebUI 统计一律走本方法。
+func (s *ScriptStats) Hits() int64 {
+	return atomic.LoadInt64(&s.TotalHits)
 }

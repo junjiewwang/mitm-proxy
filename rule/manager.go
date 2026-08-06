@@ -212,9 +212,10 @@ func (m *RuleManager) Create(name, content string) (*RuleScript, error) {
 	}
 
 	// 解析
-	script, _ := m.parser.ParseContent(content)
+	script, parseErrs := m.parser.ParseContent(content)
 	script.ID = id
 	script.FilePath = path
+	script.ParseErrors = parseErrs // 供 WebUI 展示错误标记
 	script.UpdatedAt = time.Now()
 	if script.Name == "" {
 		script.Name = name
@@ -250,7 +251,8 @@ func (m *RuleManager) Update(id, content string) error {
 	script.ID = id
 	script.FilePath = old.FilePath
 	script.Enabled = old.Enabled
-	script.Stats = old.Stats // 保留统计
+	script.Stats.AdoptFrom(&old.Stats) // 保留统计
+	script.ParseErrors = parseErrs     // 供 WebUI 展示错误标记
 	script.UpdatedAt = time.Now()
 
 	m.scripts[id] = script
@@ -350,7 +352,7 @@ func (m *RuleManager) Reload(id string) error {
 	}
 
 	script.Enabled = old.Enabled
-	script.Stats = old.Stats
+	script.Stats.AdoptFrom(&old.Stats)
 	m.scripts[id] = script
 	m.preCompileScripts(script)
 
@@ -372,7 +374,7 @@ func (m *RuleManager) ReloadAll() error {
 			continue
 		}
 		script.Enabled = old.Enabled
-		script.Stats = old.Stats
+		script.Stats.AdoptFrom(&old.Stats)
 		m.scripts[id] = script
 		m.preCompileScripts(script)
 	}
@@ -480,7 +482,8 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 		m.mu.RUnlock()
 	}
 
-	if len(toReload) == 0 {
+	// 删除与重建也属于变更，不能只看 toReload
+	if len(toReload) == 0 && len(toDelete) == 0 && len(toRecreate) == 0 {
 		return
 	}
 
@@ -509,7 +512,7 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 			continue
 		}
 		script.Enabled = true // 重建文件，自动启用
-		script.Stats = old.Stats
+		script.Stats.AdoptFrom(&old.Stats)
 		m.scripts[id] = script
 		m.preCompileScripts(script)
 		log.Printf("[RuleManager] Hot reload: recreated script %s (auto-enabled)", id)
@@ -542,7 +545,7 @@ func (m *RuleManager) checkAndReload(modTimes map[string]time.Time) {
 				continue
 			}
 			script.Enabled = old.Enabled
-			script.Stats = old.Stats
+			script.Stats.AdoptFrom(&old.Stats)
 			m.scripts[item] = script
 			m.preCompileScripts(script)
 			log.Printf("[RuleManager] Hot reload: reloaded %s", item)

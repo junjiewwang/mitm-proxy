@@ -59,7 +59,7 @@ func listRules(m *rule.RuleManager) gin.HandlerFunc {
 				Enabled:      s.Enabled,
 				RuleCount:    len(s.Rules),
 				Intercepts:   len(s.Intercepts),
-				TotalHits:    s.Stats.TotalHits,
+				TotalHits:    s.Stats.Hits(),
 				HasError:     errCount > 0,
 				WarningCount: warnCount,
 			})

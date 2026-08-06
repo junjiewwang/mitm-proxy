@@ -1,4 +1,4 @@
-.PHONY: build test clean release lint vet
+.PHONY: build test clean release lint vet cover cover-func cover-html
 
 BINARY_NAME := mitm-proxy
 MAIN_PATH   := ./cmd/mitm-proxy
@@ -38,6 +38,25 @@ test-short:
 bench:
 	go test -bench=. -benchmem -run=^$$ ./rule/ ./core/...
 
+# === 覆盖率 ===
+
+COVER_PROFILE := coverage.out
+
+cover:
+	go test -race -count=1 -covermode=atomic -coverprofile=$(COVER_PROFILE) ./...
+	@echo ""
+	@echo "=== 各包覆盖率 ==="
+	@go tool cover -func=$(COVER_PROFILE) | tail -1
+
+cover-func: cover
+	@echo ""
+	@echo "=== 逐函数覆盖率 ==="
+	@go tool cover -func=$(COVER_PROFILE)
+
+cover-html: cover
+	go tool cover -html=$(COVER_PROFILE) -o coverage.html
+	@echo "报告已生成：coverage.html"
+
 # === 代码质量 ===
 
 vet:
@@ -57,6 +76,7 @@ lint: vet
 clean:
 	rm -rf $(BIN_DIR)
 	rm -rf dist/
+	rm -f $(COVER_PROFILE) coverage.html
 
 # === 发布 ===
 
@@ -72,6 +92,9 @@ help:
 	@echo "  build-all   - Cross-compile for linux/amd64 + darwin/arm64"
 	@echo "  run         - Run proxy directly"
 	@echo "  test        - Run all tests with race detector"
+	@echo "  cover       - Run tests with coverage, print the total"
+	@echo "  cover-func  - Coverage broken down per function"
+	@echo "  cover-html  - Generate coverage.html and open-able report"
 	@echo "  bench       - Run benchmarks (rule matching, JS scripts)"
 	@echo "  vet         - Run go vet"
 	@echo "  lint        - Full lint (build + vet + sensitive scan)"
