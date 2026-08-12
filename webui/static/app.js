@@ -73,10 +73,10 @@
       });
       return resp.json();
     },
-    async debugScript(id, method, path, body, dryRun) {
+    async debugScript(id, method, path, body, dryRun, headers, cookie) {
       const resp = await fetch(`/api/rules/${id}/debug`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ method, path, body, dry_run: dryRun }),
+        body: JSON.stringify({ method, path, body, dry_run: dryRun, headers, cookie }),
       });
       return resp.json();
     },
@@ -1608,13 +1608,15 @@
     const path = $('#debugPath').value.trim();
     const body = $('#debugBody').value;
     const dryRun = $('#debugDryRun').checked;
+    const headers = $('#debugHeaders').value;
+    const cookie = $('#debugCookie').value;
     if (!path) { toast('Enter a request path', 'error'); return; }
 
     const stepsEl = $('#debugSteps');
     stepsEl.innerHTML = '<div class="debug-empty">⏳ Running debug...</div>';
 
     try {
-      const result = await api.debugScript(scriptId, method, path, body, dryRun);
+      const result = await api.debugScript(scriptId, method, path, body, dryRun, headers, cookie);
       renderDebugSteps(result);
     } catch (e) {
       stepsEl.innerHTML = '<div class="debug-empty" style="color:var(--red)">' + escapeHtml('Error: ' + e.message) + '</div>';

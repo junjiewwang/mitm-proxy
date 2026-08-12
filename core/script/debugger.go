@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -14,10 +15,12 @@ import (
 
 // DebugRequest 调试请求参数
 type DebugRequest struct {
-	Method string `json:"method"`          // HTTP 方法
-	Path   string `json:"path"`            // URL 路径（含 query）
-	Body   string `json:"body"`            // 原始请求体
-	DryRun bool   `json:"dry_run"`         // true=跳过实际后端转发
+	Method  string `json:"method"`
+	Path    string `json:"path"`
+	Body    string `json:"body"`
+	DryRun  bool   `json:"dry_run"`
+	Headers string `json:"headers"` // 可选：自定义请求头（每行 Key: Value）
+	Cookie  string `json:"cookie"`  // 可选：自定义 Cookie 字符串
 }
 
 // DebugStep 调试执行的一个步骤
@@ -80,6 +83,22 @@ func (d *Debugger) Execute(req DebugRequest, scriptID string, config map[string]
 	if parsedURL != nil {
 		httpReq.URL = parsedURL
 	}
+	// 应用调试输入的自定义 Headers 和 Cookie
+	if req.Headers != "" {
+		for _, line := range strings.Split(req.Headers, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || !strings.Contains(line, ":") {
+				continue
+			}
+			parts := strings.SplitN(line, ":", 2)
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			httpReq.Header.Set(key, val)
+		}
+	}
+	if req.Cookie != "" {
+		httpReq.Header.Set("Cookie", req.Cookie)
+	}
 
 	sc := NewScriptContext(httpReq, []byte(req.Body), config)
 
@@ -93,10 +112,13 @@ func (d *Debugger) Execute(req DebugRequest, scriptID string, config map[string]
 
 	// Step 3: forward (or skip in dry_run)
 	if sc.BackendURL != "" && req.DryRun {
+		// dry_run 跳过实际转发，注入最小占位响应使 onResponse 可正常执行
+		sc.BackendResp = []byte(`{"Response":{}}`)
+		sc.BackendStatus = 200
 		result.Steps = append(result.Steps, DebugStep{
 			Stage:     "forward",
 			Skipped:   true,
-			Output:    map[string]interface{}{"would_send_to": sc.BackendURL, "request": sc.BackendRequest},
+			Output:    map[string]interface{}{"would_send_to": sc.BackendURL, "request": sc.BackendRequest, "note": "dry_run: backend mocked"},
 			ElapsedMs: time.Since(startTotal).Seconds() * 1000,
 		})
 	} else if sc.BackendURL != "" {

@@ -97,6 +97,14 @@
             <label>Body (JSON)</label>
             <textarea id="debugBody" rows="8" class="input-full" placeholder='{"cmd":"DescribeMetricRecords","serviceType":"apm","regionId":1}'></textarea>
           </div>
+          <div class="form-row">
+            <label>Headers (one per line: Key: Value)</label>
+            <textarea id="debugHeaders" rows="3" class="input-full" placeholder="Content-Type: application/json&#10;X-Custom-Test: debug"></textarea>
+          </div>
+          <div class="form-row">
+            <label>Cookie</label>
+            <textarea id="debugCookie" rows="2" class="input-full" placeholder="uin=o700002591035; tinyid=700002591035; appid=260147315"></textarea>
+          </div>
           <div class="form-row form-row-inline">
             <label class="checkbox-label">
               <input type="checkbox" id="debugDryRun" checked> Dry Run (skip backend)
