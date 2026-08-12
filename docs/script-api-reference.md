@@ -17,6 +17,7 @@
 | `ctx.path` | `string` | URL 路径 |
 | `ctx.query` | `string` | URL 查询字符串 |
 | `ctx.headers` | `object` | 请求头（key → value） |
+| `ctx.cookies` | `object` | 解析后的 Cookie（key → value，自动处理引号） |
 
 ### 私有配置（只读）
 

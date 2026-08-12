@@ -179,6 +179,7 @@
         <div class="req-detail-tabs" id="reqDetailTabs">
           <button class="req-dtab active" data-dtab="overview">Overview</button>
           <button class="req-dtab" data-dtab="request">Request</button>
+          <button class="req-dtab" data-dtab="backend" id="reqDtabBackend" style="display:none">Backend</button>
           <button class="req-dtab" data-dtab="response">Response</button>
         </div>
         <button class="btn btn-sm" id="btnReqResend" title="Edit &amp; Resend">↻ Resend</button>
@@ -189,6 +190,7 @@
         <div id="reqNormalView">
           <div class="req-dtab-content active" id="dt-Overview"></div>
           <div class="req-dtab-content" id="dt-Request"></div>
+          <div class="req-dtab-content" id="dt-Backend"></div>
           <div class="req-dtab-content" id="dt-Response"></div>
         </div>
         <!-- Resend editor (hidden by default) -->

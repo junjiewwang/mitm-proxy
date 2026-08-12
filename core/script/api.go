@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/dop251/goja"
 )
@@ -17,6 +18,7 @@ type ScriptContext struct {
 	Path    string            `json:"path"`
 	Query   string            `json:"query"`
 	Headers map[string]string `json:"headers"`
+	Cookies map[string]string `json:"cookies"` // 解析后的 Cookie key→value
 
 	// 脚本私有配置（@config 段，框架透传）
 	Config map[string]any `json:"config"`
@@ -55,6 +57,26 @@ func NewScriptContext(req *http.Request, body []byte, config map[string]any) *Sc
 		headers[k] = req.Header.Get(k)
 	}
 
+	// 解析 Cookie 为 key→value map
+	cookies := make(map[string]string)
+	cookieHeader := req.Header.Get("Cookie")
+	if cookieHeader != "" {
+		// Cookie 格式：key1=value1; key2=value2; ...
+		parts := strings.Split(cookieHeader, ";")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if eqIdx := strings.Index(part, "="); eqIdx > 0 {
+				key := part[:eqIdx]
+				val := part[eqIdx+1:]
+				// 去掉可能被引号包裹的值
+				if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+					val = val[1 : len(val)-1]
+				}
+				cookies[key] = val
+			}
+		}
+	}
+
 	return &ScriptContext{
 		RawBody:  string(body),
 		Method:   req.Method,
@@ -62,6 +84,7 @@ func NewScriptContext(req *http.Request, body []byte, config map[string]any) *Sc
 		Path:     req.URL.Path,
 		Query:    req.URL.RawQuery,
 		Headers:  headers,
+		Cookies:  cookies,
 		Config:   config,
 		Metadata: make(map[string]any),
 		FinalStatus: 200,
@@ -193,6 +216,13 @@ func (sc *ScriptContext) buildCtxObject(vm *goja.Runtime) (*goja.Object, error) 
 		headersObj.Set(k, v)
 	}
 	obj.Set("headers", headersObj)
+
+	// cookies
+	cookiesObj := vm.NewObject()
+	for k, v := range sc.Cookies {
+		cookiesObj.Set(k, v)
+	}
+	obj.Set("cookies", cookiesObj)
 
 	// config（透传 @config 内容）
 	obj.Set("config", sc.Config)

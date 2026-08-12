@@ -53,7 +53,7 @@ type stubHandler struct {
 	resp   *http.Response
 }
 
-func (h *stubHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult) *http.Response {
+func (h *stubHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult, backendInfo *BackendInfo) *http.Response {
 	h.called.Store(true)
 	if h.resp != nil {
 		return h.resp
@@ -424,7 +424,7 @@ func TestBuildOpts(t *testing.T) {
 			RuleType: proxy.RuleTypeScript, ScriptName: "my-script", Target: "http://backend",
 		}
 
-		opts := buildOpts(req, []byte("req"), resp, []byte("resp"), match, 5*time.Millisecond)
+		opts := buildOpts(req, []byte("req"), resp, []byte("resp"), match, 5*time.Millisecond, "", "")
 
 		if opts.Req != req || opts.Resp != resp {
 			t.Error("request/response should be carried through verbatim")
@@ -447,7 +447,7 @@ func TestBuildOpts(t *testing.T) {
 		req := mustGet(t, "http://example.com/api")
 		req.Header.Set("X-Replay", "true")
 
-		opts := buildOpts(req, nil, nil, nil, &proxy.MatchResult{}, 0)
+		opts := buildOpts(req, nil, nil, nil, &proxy.MatchResult{}, 0, "", "")
 
 		if len(opts.Tags) != 1 || opts.Tags[0] != TagReplay {
 			t.Errorf("Tags = %v, want [replay]", opts.Tags)
@@ -458,14 +458,14 @@ func TestBuildOpts(t *testing.T) {
 		req := mustGet(t, "http://example.com/api")
 		req.Header.Set("X-Replay", "false")
 
-		if opts := buildOpts(req, nil, nil, nil, &proxy.MatchResult{}, 0); len(opts.Tags) != 0 {
+		if opts := buildOpts(req, nil, nil, nil, &proxy.MatchResult{}, 0, "", ""); len(opts.Tags) != 0 {
 			t.Errorf("Tags = %v, want none", opts.Tags)
 		}
 	})
 
 	t.Run("无 X-Replay 头不打标签", func(t *testing.T) {
 		req := mustGet(t, "http://example.com/api")
-		if opts := buildOpts(req, nil, nil, nil, &proxy.MatchResult{}, 0); len(opts.Tags) != 0 {
+		if opts := buildOpts(req, nil, nil, nil, &proxy.MatchResult{}, 0, "", ""); len(opts.Tags) != 0 {
 			t.Errorf("Tags = %v, want none", opts.Tags)
 		}
 	})
@@ -491,7 +491,7 @@ func TestDoScriptMissingScript(t *testing.T) {
 	d := NewProcessorDispatcher(script.NewRuntime(), mapAccessor{}, nil)
 
 	resp := d.doScript(mustGet(t, "http://example.com/api"), nil,
-		&proxy.MatchResult{RuleType: proxy.RuleTypeScript, ScriptID: "ghost", ScriptRef: "self"})
+		&proxy.MatchResult{RuleType: proxy.RuleTypeScript, ScriptID: "ghost", ScriptRef: "self"}, &BackendInfo{})
 
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("StatusCode = %d, want 500", resp.StatusCode)
@@ -508,7 +508,7 @@ func TestDoScriptWithoutBackendOrFinalResp(t *testing.T) {
 	d := NewProcessorDispatcher(script.NewRuntime(), acc, nil)
 
 	resp := d.doScript(mustGet(t, "http://example.com/api"), nil,
-		&proxy.MatchResult{RuleType: proxy.RuleTypeScript, ScriptID: "s1"})
+		&proxy.MatchResult{RuleType: proxy.RuleTypeScript, ScriptID: "s1"}, &BackendInfo{})
 
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("StatusCode = %d, want 500", resp.StatusCode)
@@ -526,7 +526,7 @@ func TestDoScriptResolvesScriptRef(t *testing.T) {
 	req := mustGet(t, "http://example.com/api")
 
 	for _, ref := range []string{"", "self"} {
-		resp := d.doScript(req, nil, &proxy.MatchResult{ScriptID: "owner", ScriptRef: ref})
+		resp := d.doScript(req, nil, &proxy.MatchResult{ScriptID: "owner", ScriptRef: ref}, &BackendInfo{})
 		body, _ := io.ReadAll(resp.Body)
 		// 找得到脚本 → 不应是 "script not found"
 		if strings.Contains(string(body), "script not found") {
@@ -535,13 +535,13 @@ func TestDoScriptResolvesScriptRef(t *testing.T) {
 	}
 
 	// 显式引用另一个脚本
-	resp := d.doScript(req, nil, &proxy.MatchResult{ScriptID: "owner", ScriptRef: "other"})
+	resp := d.doScript(req, nil, &proxy.MatchResult{ScriptID: "owner", ScriptRef: "other"}, &BackendInfo{})
 	body, _ := io.ReadAll(resp.Body)
 	if strings.Contains(string(body), "script not found") {
 		t.Error("an explicit ScriptRef should resolve to the referenced script")
 	}
 
-	resp = d.doScript(req, nil, &proxy.MatchResult{ScriptID: "owner", ScriptRef: "ghost"})
+	resp = d.doScript(req, nil, &proxy.MatchResult{ScriptID: "owner", ScriptRef: "ghost"}, &BackendInfo{})
 	body, _ = io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "script not found") {
 		t.Errorf("an unknown ScriptRef should fail, got %q", body)

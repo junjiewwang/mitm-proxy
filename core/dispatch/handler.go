@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 
@@ -10,10 +11,18 @@ import (
 	"mitm-proxy/core/script"
 )
 
+// BackendInfo 脚本处理器写入后端重写信息，供事件广播使用
+// 每条请求一个实例（栈分配），避免共享状态引起的并发问题
+type BackendInfo struct {
+	URL  string
+	Body string
+}
+
 // RuleHandler 单条规则类型的处理策略
 type RuleHandler interface {
 	// Handle 处理匹配的请求，由 ProcessorDispatcher 注入自身引用
-	Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult) *http.Response
+	// backendInfo 是栈分配的可选输出参数，handler 可写入脚本重写信息
+	Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult, backendInfo *BackendInfo) *http.Response
 }
 
 // ========================================
@@ -22,21 +31,21 @@ type RuleHandler interface {
 
 type proxyHandler struct{}
 
-func (h *proxyHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult) *http.Response {
+func (h *proxyHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult, backendInfo *BackendInfo) *http.Response {
 	return d.doProxy(req, body, match)
 }
 
 type scriptHandler struct{}
 
-func (h *scriptHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult) *http.Response {
-	return d.doScript(req, body, match)
+func (h *scriptHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult, backendInfo *BackendInfo) *http.Response {
+	return d.doScript(req, body, match, backendInfo)
 }
 
 type deprecatedHandler struct {
 	message string
 }
 
-func (h *deprecatedHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult) *http.Response {
+func (h *deprecatedHandler) Handle(d *ProcessorDispatcher, req *http.Request, body []byte, match *proxy.MatchResult, backendInfo *BackendInfo) *http.Response {
 	log.Printf("[Dispatch] WARNING: %s", h.message)
 	return proxy.BuildErrorResponse(http.StatusGone, h.message)
 }
@@ -66,7 +75,7 @@ func (d *ProcessorDispatcher) doProxy(req *http.Request, body []byte, match *pro
 	return resp
 }
 
-func (d *ProcessorDispatcher) doScript(req *http.Request, body []byte, match *proxy.MatchResult) *http.Response {
+func (d *ProcessorDispatcher) doScript(req *http.Request, body []byte, match *proxy.MatchResult, backendInfo *BackendInfo) *http.Response {
 	scriptID := match.ScriptRef
 	if scriptID == "" || scriptID == "self" {
 		scriptID = match.ScriptID
@@ -90,6 +99,10 @@ func (d *ProcessorDispatcher) doScript(req *http.Request, body []byte, match *pr
 		return d.buildScriptResponse(req, sc, match)
 	}
 	if sc.BackendURL != "" {
+		// 写入脚本重写的后端信息到调用方的 stack 变量，零共享、并发安全
+		backendReqJSON, _ := json.Marshal(sc.BackendRequest)
+		backendInfo.URL = sc.BackendURL
+		backendInfo.Body = string(backendReqJSON)
 		if err := d.forwardToBackend(sc); err != nil {
 			return proxy.BuildErrorResponse(http.StatusBadGateway, "backend forward failed: "+err.Error())
 		}

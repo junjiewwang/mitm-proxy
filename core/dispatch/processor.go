@@ -66,24 +66,25 @@ func (d *ProcessorDispatcher) Process(req *http.Request, body []byte, match *pro
 	if match.CORS && req.Method == http.MethodOptions {
 		resp := d.buildCORSPreflightResponse(req)
 		respBody := readAndReplaceBody(resp)
-		d.broadcast(buildOpts(req, body, resp, respBody, match, time.Since(start)))
+		d.broadcast(buildOpts(req, body, resp, respBody, match, time.Since(start), "", ""))
 		return resp
 	}
 
-	// 策略分发
+	// 策略分发（栈上 backendInfo，零锁）
 	d.mu.RLock()
 	handler, ok := d.handlers[match.RuleType]
 	d.mu.RUnlock()
 
 	var resp *http.Response
+	var backendInfo BackendInfo // 栈分配，每条请求独立，无并发问题
 	if !ok {
 		resp = proxy.BuildErrorResponse(http.StatusInternalServerError, "unknown rule type")
 	} else {
-		resp = handler.Handle(d, req, body, match)
+		resp = handler.Handle(d, req, body, match, &backendInfo)
 	}
 
 	respBody := readAndReplaceBody(resp)
-	d.broadcast(buildOpts(req, body, resp, respBody, match, time.Since(start)))
+	d.broadcast(buildOpts(req, body, resp, respBody, match, time.Since(start), backendInfo.URL, backendInfo.Body))
 	return resp
 }
 
@@ -207,14 +208,16 @@ func readAndReplaceBody(resp *http.Response) []byte {
 	}
 }
 
-func buildOpts(req *http.Request, reqBody []byte, resp *http.Response, respBody []byte, match *proxy.MatchResult, elapsed time.Duration) BuildOptions {
+func buildOpts(req *http.Request, reqBody []byte, resp *http.Response, respBody []byte, match *proxy.MatchResult, elapsed time.Duration, backendURL, backendReq string) BuildOptions {
 	opts := BuildOptions{
-		Req:      req,
-		ReqBody:  reqBody,
-		Resp:     resp,
-		RespBody: respBody,
-		Match:    MatchInfo{ScriptName: match.ScriptName, RuleType: match.TypeName(), Target: match.Target},
-		Elapsed:  elapsed,
+		Req:            req,
+		ReqBody:        reqBody,
+		Resp:           resp,
+		RespBody:       respBody,
+		Match:          MatchInfo{ScriptName: match.ScriptName, RuleType: match.TypeName(), Target: match.Target},
+		Elapsed:        elapsed,
+		BackendURL:     backendURL,
+		BackendRequest: backendReq,
 	}
 	if req.Header.Get("X-Replay") == "true" {
 		opts.Tags = append(opts.Tags, TagReplay)

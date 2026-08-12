@@ -81,6 +81,8 @@ func BuildEvent(opts BuildOptions) *event.Event {
 		RespHeaders:   respHeaders,
 		RespBody:      truncateBody(opts.RespBody),
 		ContentType:   contentType,
+		BackendURL:     opts.BackendURL,
+		BackendRequest: truncateBody([]byte(opts.BackendRequest)),
 		ContentLength: contentLength,
 	}
 }
@@ -98,11 +100,13 @@ func truncateBody(data []byte) string {
 
 // BuildOptions 构建事件所需的全部输入
 type BuildOptions struct {
-	Req      *http.Request
-	ReqBody  []byte
-	Resp     *http.Response
-	RespBody []byte
-	Match    MatchInfo
-	Elapsed  time.Duration
-	Tags     []EventTag
+	Req            *http.Request
+	ReqBody        []byte
+	Resp           *http.Response
+	RespBody       []byte
+	Match          MatchInfo
+	Elapsed        time.Duration
+	Tags           []EventTag
+	BackendURL     string // 脚本重写的后端 URL
+	BackendRequest string // 脚本重写的请求体
 }
