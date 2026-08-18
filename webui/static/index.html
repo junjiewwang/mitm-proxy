@@ -110,6 +110,11 @@
               <input type="checkbox" id="debugDryRun" checked> Dry Run (skip backend)
             </label>
           </div>
+          <div class="form-row">
+            <label>Import from curl</label>
+            <textarea id="debugCurl" rows="5" class="input-full mono" placeholder="粘贴 curl 命令，自动解析 method/path/headers/cookie/body"></textarea>
+            <button class="btn btn-sm" id="btnDebugParseCurl" style="margin-top:6px">↪ Parse curl</button>
+          </div>
           <button class="btn btn-primary btn-full" id="btnDebugRun">▶ Run Debug</button>
         </div>
       </div>

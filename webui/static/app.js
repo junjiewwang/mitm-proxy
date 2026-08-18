@@ -1688,6 +1688,68 @@
 
   function initDebugActions() {
     $('#btnDebugRun').addEventListener('click', runDebug);
+    $('#btnDebugParseCurl').addEventListener('click', parseCurl);
+  }
+
+  // parseCurl 解析 curl 命令，填充到 Debug 表单
+  function parseCurl() {
+    const el = $('#debugCurl');
+    const cmd = el ? el.value.trim() : '';
+    if (!cmd) { toast('请先粘贴 curl 命令', 'error'); return; }
+
+    // 1. 提取 URL（单引号或双引号包裹）
+    const urlMatch = cmd.match(/['"]((?:https?):\/\/[^'"]+)['"]/i);
+    if (!urlMatch) { toast('未识别到 URL', 'error'); return; }
+
+    let method = 'POST';
+    let headers = {};
+    let cookie = '';
+    let body = '';
+
+    // 2. 提取 method（-X 或 --request）
+    const methodMatch = cmd.match(/(?:-X|--request)\s+['"]?(\w+)['"]?/i);
+    if (methodMatch) method = methodMatch[1].toUpperCase();
+
+    // 3. 提取所有 -H / --header
+    const headerRe = /(?:-H|--header)\s+['"]([^'"]+)['"]/gi;
+    let h;
+    while ((h = headerRe.exec(cmd)) !== null) {
+      const line = h[1];
+      const idx = line.indexOf(':');
+      if (idx > 0) {
+        const key = line.substring(0, idx).trim();
+        const val = line.substring(idx + 1).trim();
+        if (key.toLowerCase() === 'cookie') {
+          cookie = val;
+        } else if (key.toLowerCase() === 'connection' || key.toLowerCase() === 'accept-encoding' ||
+                   key.toLowerCase() === 'content-length') {
+          // 忽略传输层/连接层头，避免干扰
+        } else {
+          headers[key] = val;
+        }
+      }
+    }
+
+    // 4. 提取 body（--data-raw 优先，其次 --data，最后 -d）
+    const bodyMatch = cmd.match(/--data-raw\s+'([^']*)'/s) ||
+                      cmd.match(/--data-raw\s+"([^"]*)"/s) ||
+                      cmd.match(/--data\s+'([^']*)'/s) ||
+                      cmd.match(/-d\s+'([^']*)'/s);
+    if (bodyMatch) body = bodyMatch[1];
+
+    // 5. path 直接填完整 URL（含 scheme+host），后端 RequireExternal 要求完整 URL，
+    //    engine.Match 内部会从完整 URL 解析 Path+RawQuery 去匹配 regex
+    const path = urlMatch[1];
+
+    // 6. 填充表单
+    $('#debugMethod').value = method;
+    $('#debugPath').value = path;
+    $('#debugBody').value = body;
+    $('#debugCookie').value = cookie;
+    const headerLines = Object.keys(headers).map(k => k + ': ' + headers[k]).join('\n');
+    $('#debugHeaders').value = headerLines;
+
+    toast('curl 解析完成：' + method + ' ' + path, 'success');
   }
 
   // ========== Initialization ==========
