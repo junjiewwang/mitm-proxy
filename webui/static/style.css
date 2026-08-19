@@ -670,6 +670,26 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .req-dtab-content.active { display: block; }
 
 .detail-section { margin-bottom: 12px; }
+
+/* Backend 对比两栏布局：宽屏左右并排，窄屏自动回退单栏 */
+.backend-compare {
+  display: flex; gap: 12px;
+  align-items: flex-start;
+}
+.backend-col {
+  flex: 1; min-width: 0;
+}
+.backend-col h4 {
+  font-size: 11px; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+.backend-col .body-pre { max-height: 420px; overflow: auto; }
+@media (max-width: 760px) {
+  .backend-compare { flex-direction: column; }
+}
+
 .detail-section h4 {
   font-size: 11px; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: 0.5px;

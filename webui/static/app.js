@@ -1297,15 +1297,22 @@
     if (backendUrl) {
       var backendReqHtml = backendReq ? '<pre class="body-pre">' + escapeHtml(tryFormatJSON(backendReq)) + '</pre>'
                                        : '<div class="empty-body">(no body)</div>';
+      var origReqHtml = evt.req_body ? '<pre class="body-pre">' + escapeHtml(tryFormatJSON(evt.req_body)) + '</pre>'
+                                     : '<div class="empty-body">(no body)</div>';
+      // 两栏对比布局：顶部 Target URL，下面左右两栏（原请求 vs 脚本重写后）
       var backendHeadersHtml = '<div class="detail-section"><div class="req-detail-grid">' +
         '<div class="req-detail-row"><span class="rd-label">Target URL</span><span class="rd-value url-full">' + escapeHtml(backendUrl) + '</span></div>' +
         '</div></div>';
       $('#dt-Backend').innerHTML =
         backendHeadersHtml +
-        '<div class="detail-section"><h4>Rewritten Request (by Script)</h4>' + backendReqHtml + '</div>' +
-        '<div class="detail-section"><h4>Original Request Body</h4>' +
-          (evt.req_body ? '<pre class="body-pre">' + escapeHtml(tryFormatJSON(evt.req_body)) + '</pre>'
-                        : '<div class="empty-body">(no body)</div>') + '</div>';
+        '<div class="backend-compare">' +
+          '<div class="backend-col">' +
+            '<h4>Original Request Body</h4>' + origReqHtml +
+          '</div>' +
+          '<div class="backend-col">' +
+            '<h4>Rewritten Request (by Script)</h4>' + backendReqHtml +
+          '</div>' +
+        '</div>';
     }
 
     // Response tab
