@@ -10,6 +10,8 @@
 - **配置自管理** — 业务配置（backend/auth/region_map）通过 `@config` 段内聚在规则文件中
 - **Web UI 管理面板** — 规则编辑器 + 语法高亮 + Debug 调式面板 + SSE 实时日志
 - **热加载** — 修改规则文件自动重载，文件删除/新增/修改全部检测
+- **hosts 冲突检测** — 同一域名映射到不同 IP 时告警，编辑器内联提示 + 行号跳转
+- **请求对比排查** — Requests 详情页展示脚本重写前后的请求体（两栏对比）
 - **MCP Server** — 内置 JSON-RPC 2.0 接口，支持 AI 助手集成
 - **可复用的核心框架** — `core/proxy`/`core/rule`/`core/script` 可被外部项目 import
 
@@ -135,9 +137,13 @@ backend:
 访问 Web UI 的 **Debug** Tab：
 
 1. 选择目标脚本
-2. 输入 Method / Path / Body
+2. 输入 Method / Path / Body（可选：Headers、Cookie）
 3. 勾选 Dry Run 跳过实际后端转发
 4. 点击 **Run Debug** 查看分步执行结果和 console.log 输出
+
+**curl 一键导入**：直接粘贴浏览器复制的 curl 命令，点击 **Parse curl** 自动解析并填充 Method / Path / Headers / Cookie / Body。
+
+**Requests 详情**：点击命中脚本的请求，Backend Tab 以两栏对比展示原始请求体和脚本重写后的请求体，方便排查规则转换是否正确。
 
 详见 [JS API 参考](docs/script-api-reference.md)
 
