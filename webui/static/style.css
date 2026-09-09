@@ -487,6 +487,32 @@ h1 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .debug-step-header .stage-time { margin-left: auto; font-size: 10px; color: var(--text-muted); }
 
 .debug-step-body { padding: 8px 12px; }
+
+/* Backend / Final Response 双栏对比 */
+.debug-resp-compare {
+  display: flex; gap: 12px; align-items: flex-start;
+}
+.debug-resp-col {
+  flex: 1; min-width: 0;
+}
+.debug-resp-title {
+  font-size: 11px; color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+  display: flex; align-items: center; gap: 6px;
+}
+.debug-resp-status {
+  color: var(--accent); font-weight: 600;
+  text-transform: none; letter-spacing: 0;
+}
+.debug-resp-col pre {
+  max-height: 420px; overflow-y: auto;
+}
+@media (max-width: 720px) {
+  .debug-resp-compare { flex-direction: column; }
+}
+
 .debug-step-body pre {
   margin: 0; padding: 8px;
   background: var(--bg-primary);

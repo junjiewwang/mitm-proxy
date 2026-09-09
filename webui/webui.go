@@ -307,7 +307,7 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 			return
 		}
 
-		// 执行规则匹配
+		// 执行规则匹配（仅作为提示，不阻止后续执行：用户手动指定 script 即按指定执行）
 		matched := false
 		engine := manager.GetEngine()
 		if engine != nil && req.Path != "" {
@@ -335,20 +335,13 @@ func RegisterRoutes(engine *gin.Engine, manager *rule.RuleManager, broadcaster *
 			}
 		}
 
-		if !matched {
-			c.JSON(http.StatusOK, gin.H{
-				"steps": []gin.H{
-					{"stage": "rule_match", "matched": false, "output": gin.H{"note": "no rule matched this path"}, "elapsed_ms": 0},
-				},
-				"total_elapsed_ms": 0,
-			})
-			return
-		}
+		// 注意：用户手动选了 script id，意图就是跑这个 script（即使 disabled 或不被 match 命中）
+		// 这里的 matched 仅作后续步骤的提示，不再作为是否执行的硬性条件
 
 		// 执行调试
 		hasOnReq := rs.Scripts["onRequest"] != ""
 		hasOnResp := rs.Scripts["onResponse"] != ""
-		result := debugger.Execute(req, id, rs.Config, rs.CompiledPrograms, hasOnReq, hasOnResp)
+		result := debugger.Execute(req, id, rs.Config, rs.CompiledPrograms, hasOnReq, hasOnResp, matched)
 		c.JSON(http.StatusOK, result)
 	})
 

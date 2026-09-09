@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/dop251/goja"
@@ -21,7 +20,7 @@ func compileStage(t *testing.T, src string) *goja.Program {
 
 func TestDebuggerEmptyScriptID(t *testing.T) {
 	d := NewDebugger(NewRuntime())
-	res := d.Execute(DebugRequest{Method: "POST", Path: "/x"}, "", nil, nil, false, false)
+	res := d.Execute(DebugRequest{Method: "POST", Path: "/x"}, "", nil, nil, false, false, true)
 	if len(res.Steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(res.Steps))
 	}
@@ -35,7 +34,7 @@ func TestDebuggerEmptyScriptID(t *testing.T) {
 
 func TestDebuggerRuleMatchStep(t *testing.T) {
 	d := NewDebugger(NewRuntime())
-	res := d.Execute(DebugRequest{Method: "POST", Path: "/x"}, "script-123", nil, nil, false, false)
+	res := d.Execute(DebugRequest{Method: "POST", Path: "/x"}, "script-123", nil, nil, false, false, true)
 	if len(res.Steps) == 0 || res.Steps[0].Stage != "rule_match" {
 		t.Fatalf("expected first step rule_match, got %+v", res.Steps)
 	}
@@ -46,7 +45,7 @@ func TestDebuggerRuleMatchStep(t *testing.T) {
 
 func TestDebuggerNoScriptStagesSkipped(t *testing.T) {
 	d := NewDebugger(NewRuntime())
-	res := d.Execute(DebugRequest{Method: "GET", Path: "/api"}, "sid", nil, nil, false, false)
+	res := d.Execute(DebugRequest{Method: "GET", Path: "/api"}, "sid", nil, nil, false, false, true)
 
 	// 查找 onRequest / onResponse / forward 步骤
 	var onReq, onResp, fwd bool
@@ -81,7 +80,7 @@ func TestDebuggerOnRequestSetsBackendURLDryRun(t *testing.T) {
 	progs := map[string]*goja.Program{"onRequest": onReq}
 	res := d.Execute(
 		DebugRequest{Method: "POST", Path: "/cgi/capi", Body: `{"cmd":"Test"}`, DryRun: true},
-		"sid", nil, progs, true, false,
+		"sid", nil, progs, true, false, true,
 	)
 
 	var onReqStep, fwdStep *DebugStep
@@ -134,7 +133,7 @@ func TestDebuggerForwardRealBackend(t *testing.T) {
 	progs := map[string]*goja.Program{"onRequest": onReq}
 	res := d.Execute(
 		DebugRequest{Method: "POST", Path: "/cgi/capi", Body: `{"cmd":"T"}`, DryRun: false},
-		"sid", nil, progs, true, false,
+		"sid", nil, progs, true, false, true,
 	)
 
 	var fwdStep *DebugStep
@@ -162,7 +161,7 @@ func TestDebuggerOnRequestErrorStops(t *testing.T) {
 
 	res := d.Execute(
 		DebugRequest{Method: "POST", Path: "/x"},
-		"sid", nil, progs, true, false,
+		"sid", nil, progs, true, false, true,
 	)
 
 	var onReqStep, fwdStep *DebugStep
@@ -189,7 +188,7 @@ func TestDebuggerOnResponsePhase(t *testing.T) {
 	progs := map[string]*goja.Program{"onResponse": onResp}
 	res := d.Execute(
 		DebugRequest{Method: "POST", Path: "/x", DryRun: true},
-		"sid", nil, progs, false, true,
+		"sid", nil, progs, false, true, true,
 	)
 
 	var respStep *DebugStep
@@ -207,19 +206,5 @@ func TestDebuggerOnResponsePhase(t *testing.T) {
 	out := respStep.Output.(map[string]interface{})
 	if out["finalStatus"] != 201 {
 		t.Fatalf("finalStatus wrong: %+v", out["finalStatus"])
-	}
-}
-
-func TestTruncateString(t *testing.T) {
-	if truncateString("short", 500) != "short" {
-		t.Fatal("short string should be unchanged")
-	}
-	long := strings.Repeat("a", 1000)
-	trunc := truncateString(long, 100)
-	if len(trunc) != 103 {
-		t.Fatalf("expected 103 chars (100 + '...'), got %d", len(trunc))
-	}
-	if !strings.HasSuffix(trunc, "...") {
-		t.Fatal("truncated string should end with '...'")
 	}
 }

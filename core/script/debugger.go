@@ -55,7 +55,8 @@ func NewDebugger(runtime *Runtime) *Debugger {
 // config: @config 段内容
 // compiledProgs: 预编译的 JS 程序
 // hasOnReq/hasOnResp: 是否有对应阶段的脚本
-func (d *Debugger) Execute(req DebugRequest, scriptID string, config map[string]any, compiledProgs map[string]*goja.Program, hasOnReq, hasOnResp bool) *DebugResult {
+// pathMatched: engine.Match 是否命中（用于在 rule_match 步骤如实提示真实环境匹配状态）
+func (d *Debugger) Execute(req DebugRequest, scriptID string, config map[string]any, compiledProgs map[string]*goja.Program, hasOnReq, hasOnResp bool, pathMatched bool) *DebugResult {
 	startTotal := time.Now()
 	result := &DebugResult{}
 
@@ -65,11 +66,15 @@ func (d *Debugger) Execute(req DebugRequest, scriptID string, config map[string]
 		return result
 	}
 
-	// Step 1: rule_match (always matched since script was already resolved)
+	// Step 1: rule_match — 用户手动指定了 script 即视为命中，但 pathMatched 反映真实环境
+	ruleMatchNote := "user-selected script"
+	if !pathMatched {
+		ruleMatchNote += " (note: path not matched by any enabled rule in engine)"
+	}
 	result.Steps = append(result.Steps, DebugStep{
-		Stage:   "rule_match",
-		Matched: true,
-		Output:  map[string]interface{}{"script_id": scriptID},
+		Stage:    "rule_match",
+		Matched:  true,
+		Output:   map[string]interface{}{"script_id": scriptID, "path_matched_in_engine": pathMatched, "note": ruleMatchNote},
 		ElapsedMs: 0,
 	})
 
@@ -198,8 +203,12 @@ func (d *Debugger) stepExecute(stage string, prog *goja.Program, sc *ScriptConte
 		output["backendHeaders"] = sc.BackendHeaders
 	case "onResponse":
 		output["finalStatus"] = sc.FinalStatus
+		output["backendStatus"] = sc.BackendStatus
+		if len(sc.BackendResp) > 0 {
+			output["backendResp"] = string(sc.BackendResp) // 完整后端响应
+		}
 		if len(sc.FinalResp) > 0 {
-			output["finalRespPreview"] = truncateString(string(sc.FinalResp), 500)
+			output["finalResp"] = string(sc.FinalResp) // 完整最终响应
 		}
 	}
 	step.Output = output
@@ -244,15 +253,8 @@ func (d *Debugger) stepForward(sc *ScriptContext) DebugStep {
 	step.Output = map[string]interface{}{
 		"status_code": resp.StatusCode,
 		"body_size":   len(respBody),
-		"body_preview": truncateString(string(respBody), 300),
+		"body":        string(respBody), // 完整响应体（不截断）
 	}
 	step.ElapsedMs = time.Since(start).Seconds() * 1000
 	return step
-}
-
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

@@ -1596,8 +1596,18 @@
     if (!sel) return;
     const cur = sel.value;
     sel.innerHTML = '';
-    state.scripts.forEach(s => {
-      sel.appendChild(new Option(s.name || s.id, s.id));
+    // 按 enabled 排序（启用的在前），保留 disabled 选项用于调试禁用规则
+    const sorted = [...state.scripts].sort((a, b) => {
+      if (a.enabled === b.enabled) return 0;
+      return a.enabled ? -1 : 1;
+    });
+    sorted.forEach(s => {
+      const opt = new Option(s.name || s.id, s.id);
+      if (!s.enabled) {
+        opt.textContent = (s.name || s.id) + ' (disabled)';
+        opt.style.color = 'var(--text-muted)';
+      }
+      sel.appendChild(opt);
     });
     if (cur) sel.value = cur;
   }
@@ -1662,17 +1672,37 @@
       if (step.error) {
         body.innerHTML = '<div class="error-msg">' + escapeHtml(step.error) + '</div>';
       } else if (step.output && typeof step.output === 'object' && !Array.isArray(step.output)) {
-        let html = '';
-        if (step.output.script_id) html += '<div style="font-size:11px;color:var(--accent)">Script: ' + escapeHtml(step.output.script_id) + '</div>';
-        if (step.output.rule) html += '<div style="font-size:11px;color:var(--text-secondary)">Rule: ' + escapeHtml(step.output.rule) + '</div>';
-        if (step.output.backendURL) html += '<div style="font-size:11px;color:var(--green)">Backend: ' + escapeHtml(step.output.backendURL) + '</div>';
-        if (step.output.would_send_to) html += '<div style="font-size:11px;color:var(--yellow)">Would POST → ' + escapeHtml(step.output.would_send_to) + '</div>';
-        if (step.output.body_preview) html += '<pre>' + escapeHtml(step.output.body_preview) + '</pre>';
-        if (step.output.finalRespPreview) html += '<pre>' + escapeHtml(step.output.finalRespPreview) + '</pre>';
-        if (step.output.backendRequest) html += '<pre>' + escapeHtml(JSON.stringify(step.output.backendRequest, null, 2)) + '</pre>';
-        if (step.output.status_code) html += '<div style="font-size:11px;color:var(--text-secondary)">Status: ' + step.output.status_code + '</div>';
-        if (step.output.note) html += '<div style="font-size:11px;color:var(--text-muted)">' + escapeHtml(step.output.note) + '</div>';
-        body.innerHTML = html;
+        const o = step.output;
+        // onResponse 且同时有 backendResp + finalResp：双栏对比展示
+        if (step.stage === 'onResponse' && o.backendResp && o.finalResp) {
+          let html = '<div class="debug-resp-compare">';
+          html += '<div class="debug-resp-col">' +
+            '<div class="debug-resp-title">Backend Response' + (o.backendStatus != null ? '<span class="debug-resp-status">' + o.backendStatus + '</span>' : '') + '</div>' +
+            '<pre>' + escapeHtml(tryFormatJSON(o.backendResp)) + '</pre>' +
+          '</div>';
+          html += '<div class="debug-resp-col">' +
+            '<div class="debug-resp-title">Final Response' + (o.finalStatus != null ? '<span class="debug-resp-status">' + o.finalStatus + '</span>' : '') + '</div>' +
+            '<pre>' + escapeHtml(tryFormatJSON(o.finalResp)) + '</pre>' +
+          '</div>';
+          html += '</div>';
+          if (o.note) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px">' + escapeHtml(o.note) + '</div>';
+          body.innerHTML = html;
+        } else {
+          let html = '';
+          if (o.script_id) html += '<div style="font-size:11px;color:var(--accent)">Script: ' + escapeHtml(o.script_id) + '</div>';
+          if (o.rule) html += '<div style="font-size:11px;color:var(--text-secondary)">Rule: ' + escapeHtml(o.rule) + '</div>';
+          if (o.backendURL) html += '<div style="font-size:11px;color:var(--green)">Backend: ' + escapeHtml(o.backendURL) + '</div>';
+          if (o.would_send_to) html += '<div style="font-size:11px;color:var(--yellow)">Would POST → ' + escapeHtml(o.would_send_to) + '</div>';
+          if (o.status_code) html += '<div style="font-size:11px;color:var(--text-secondary)">Status: ' + o.status_code + '</div>';
+          if (o.body) html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Response Body:</div><pre>' + escapeHtml(tryFormatJSON(o.body)) + '</pre>';
+          if (o.backendStatus != null) html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Backend Status: ' + o.backendStatus + '</div>';
+          if (o.backendResp) html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Backend Response:</div><pre>' + escapeHtml(tryFormatJSON(o.backendResp)) + '</pre>';
+          if (o.finalStatus != null) html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Final Status: ' + o.finalStatus + '</div>';
+          if (o.finalResp) html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Final Response:</div><pre>' + escapeHtml(tryFormatJSON(o.finalResp)) + '</pre>';
+          if (o.backendRequest) html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Backend Request:</div><pre>' + escapeHtml(JSON.stringify(o.backendRequest, null, 2)) + '</pre>';
+          if (o.note) html += '<div style="font-size:11px;color:var(--text-muted)">' + escapeHtml(o.note) + '</div>';
+          body.innerHTML = html;
+        }
       } else if (step.output) {
         body.innerHTML = '<pre>' + escapeHtml(typeof step.output === 'string' ? step.output : JSON.stringify(step.output, null, 2)) + '</pre>';
       }
