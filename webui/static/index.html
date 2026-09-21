@@ -1,318 +1,341 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Proxy Manager</title>
+<title>mitm-proxy</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%234D9FFF'/%3E%3Cpath d='M13 5 6 14h5l-1 5 7-9h-5l1-5z' fill='%230B0F14'/%3E%3C/svg%3E">
 </head>
 <body>
-  <header>
-    <div class="header-left">
-      <h1>⚡ Proxy Manager</h1>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" stroke="#0B0F14" stroke-width="2.2" stroke-linejoin="round"/></svg>
+      </div>
+      <span class="brand-name">mitm-proxy</span>
       <span class="version">MITM Proxy Framework</span>
     </div>
-    <div class="header-right">
-      <div class="status-indicators">
-        <span class="indicator" id="sseStatus" title="SSE Connection">
-          <span class="dot"></span>
-          <span class="label">Live</span>
-        </span>
-        <span class="indicator" title="Uptime">
-          <span class="label" id="uptimeValue">--</span>
-        </span>
-      </div>
+    <div class="topbar-right">
+      <span class="indicator" id="sseStatus" title="SSE Connection">
+        <span class="dot"></span>
+        <span class="label">Live</span>
+      </span>
+      <span class="indicator" title="Uptime">
+        <span class="label" id="uptimeValue">--</span>
+      </span>
     </div>
   </header>
 
-  <nav class="tabs">
-    <button class="tab active" data-tab="rules">📋 Rules</button>
-    <button class="tab" data-tab="debug">🐞 Debug</button>
-    <button class="tab" data-tab="requests">📡 Requests</button>
-    <button class="tab" data-tab="status">📊 Status</button>
-  </nav>
+  <div class="layout">
+    <nav class="sidebar">
+      <button class="tab active" data-tab="rules">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z" stroke="currentColor" stroke-width="1.7"/></svg>
+        <span>Rules</span>
+      </button>
+      <button class="tab" data-tab="debug">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 4a3 3 0 0 0-3 3v2a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2V7a3 3 0 0 0-3-3h-4z" stroke="currentColor" stroke-width="1.6"/><path d="M9 9h6M9 13h6M9 17h3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span>Debug</span>
+      </button>
+      <button class="tab" data-tab="requests">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3 12h3l2-6 3 12 3-9 2 3h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Requests</span>
+      </button>
+      <button class="tab" data-tab="status">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M3 12h4l3-8 4 16 3-8h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Status</span>
+      </button>
+      <div class="sidebar-footer">MITM Proxy Framework</div>
+    </nav>
 
-  <!-- ============ Rules Tab ============ -->
-  <section id="tab-rules" class="tab-content active">
-    <div class="toolbar">
-      <button class="btn btn-primary" id="btnNewRule">+ New Script</button>
-      <button class="btn" id="btnReloadAll">↻ Reload All</button>
-      <div class="toolbar-spacer"></div>
-      <span class="count" id="scriptCount">0 scripts</span>
-    </div>
+    <main class="main">
 
-    <div class="split-view">
-      <div class="panel script-list" id="scriptList">
-        <div class="empty-state" id="emptyScripts">
-          <p>No rule scripts found</p>
-          <p class="hint">Click "+ New Script" or add .rules files to rules/ directory</p>
+      <!-- ============ Rules Tab ============ -->
+      <section id="tab-rules" class="tab-content active">
+        <div class="toolbar">
+          <button class="btn btn-primary" id="btnNewRule">＋ 新建脚本</button>
+          <button class="btn" id="btnReloadAll">↻ 重载全部</button>
+          <div class="toolbar-spacer"></div>
+          <span class="count" id="scriptCount">0 scripts</span>
         </div>
-      </div>
 
-      <div class="panel editor-panel" id="editorPanel">
-        <div class="editor-header">
-          <span class="editor-title" id="editorTitle">Select a script to edit</span>
-          <div class="editor-actions" id="editorActions" style="display:none">
-            <button class="btn btn-sm" id="btnValidate" title="Validate">✓ Validate</button>
-            <button class="btn btn-sm btn-primary" id="btnSave" title="Save (Ctrl+S)">💾 Save</button>
+        <div class="split-view">
+          <div class="panel script-list" id="scriptList">
+            <div class="empty-state" id="emptyScripts">
+              <p>暂无规则脚本</p>
+              <p class="hint">点击「＋ 新建脚本」，或向 rules/ 目录添加 .rules 文件</p>
+            </div>
+          </div>
+
+          <div class="panel editor-panel" id="editorPanel">
+            <div class="editor-header">
+              <span class="editor-title" id="editorTitle">选择脚本进行编辑</span>
+              <div class="editor-actions" id="editorActions" style="display:none">
+                <button class="btn btn-sm" id="btnValidate" title="Validate">✓ 校验</button>
+                <button class="btn btn-sm btn-primary" id="btnSave" title="Save (Ctrl+S)">💾 保存</button>
+              </div>
+            </div>
+            <div class="editor-body">
+              <div class="editor-placeholder" id="editorPlaceholder">
+                <p>← 从左侧列表选择一个脚本</p>
+                <p class="hint">或新建一个</p>
+              </div>
+              <div class="editor-container" id="editorContainer" style="display:none">
+                <div class="line-numbers" id="lineNumbers"></div>
+                <textarea id="editorTextarea" spellcheck="false" wrap="off"></textarea>
+              </div>
+              <div class="validation-bar" id="validationBar" style="display:none"></div>
+            </div>
           </div>
         </div>
-        <div class="editor-body">
-          <div class="editor-placeholder" id="editorPlaceholder">
-            <p>← Select a script from the list</p>
-            <p class="hint">or create a new one</p>
-          </div>
-          <div class="editor-container" id="editorContainer" style="display:none">
-            <div class="line-numbers" id="lineNumbers"></div>
-            <textarea id="editorTextarea" spellcheck="false" wrap="off"></textarea>
-          </div>
-          <div class="validation-bar" id="validationBar" style="display:none"></div>
-        </div>
-      </div>
-    </div>
-  </section>
+      </section>
 
-  <!-- ============ Debug Tab ============ -->
-  <section id="tab-debug" class="tab-content">
-    <div class="debug-layout">
-      <div class="debug-left panel">
-        <div class="debug-section-header">Request</div>
-        <div class="debug-form">
-          <div class="form-row">
-            <label>Script</label>
-            <select id="debugScriptId"></select>
+      <!-- ============ Debug Tab ============ -->
+      <section id="tab-debug" class="tab-content">
+        <div class="debug-layout">
+          <div class="debug-left panel">
+            <div class="debug-section-header">Request</div>
+            <div class="debug-form">
+              <div class="form-row">
+                <label>Script</label>
+                <select id="debugScriptId"></select>
+              </div>
+              <div class="form-row">
+                <label>Method</label>
+                <select id="debugMethod">
+                  <option>POST</option><option>GET</option><option>PUT</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label>Path</label>
+                <input type="text" id="debugPath" placeholder="/cgi/capi?action=delegate&serviceType=apm" class="input-full">
+              </div>
+              <div class="form-row">
+                <label>Body (JSON)</label>
+                <textarea id="debugBody" rows="8" class="input-full" placeholder='{"cmd":"DescribeMetricRecords","serviceType":"apm","regionId":1}'></textarea>
+              </div>
+              <div class="form-row">
+                <label>Headers (每行 Key: Value)</label>
+                <textarea id="debugHeaders" rows="3" class="input-full" placeholder="Content-Type: application/json&#10;X-Custom-Test: debug"></textarea>
+              </div>
+              <div class="form-row">
+                <label>Cookie</label>
+                <textarea id="debugCookie" rows="2" class="input-full" placeholder="uin=o700002591035; tinyid=700002591035; appid=260147315"></textarea>
+              </div>
+              <div class="form-row form-row-inline">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="debugDryRun" checked> Dry Run (跳过真实转发)
+                </label>
+              </div>
+              <div class="form-row">
+                <label>从 curl 导入</label>
+                <textarea id="debugCurl" rows="5" class="input-full mono" placeholder="粘贴 curl 命令，自动解析 method/path/headers/cookie/body"></textarea>
+                <button class="btn btn-sm" id="btnDebugParseCurl" style="margin-top:6px">↪ 解析 curl</button>
+              </div>
+              <button class="btn btn-primary btn-full" id="btnDebugRun">▶ 运行调试</button>
+            </div>
           </div>
-          <div class="form-row">
-            <label>Method</label>
-            <select id="debugMethod">
-              <option>POST</option><option>GET</option><option>PUT</option>
+
+          <div class="debug-right">
+            <div class="debug-section-header">执行步骤</div>
+            <div class="debug-steps" id="debugSteps">
+              <div class="debug-empty">点击「运行调试」查看分步执行结果</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ Requests Tab ============ -->
+      <section id="tab-requests" class="tab-content">
+        <div class="toolbar">
+          <div class="filter-group">
+            <select id="reqFilterType">
+              <option value="">所有类型</option>
+              <option value="match">Match</option>
+              <option value="replay">Replay</option>
+              <option value="forward">Forward</option>
+              <option value="tunnel">Tunnel</option>
+              <option value="error">Error</option>
             </select>
+            <select id="reqFilterScript">
+              <option value="">所有脚本</option>
+            </select>
+            <select id="reqFilterRuleType">
+              <option value="">所有规则类型</option>
+              <option value="proxy">Proxy</option>
+              <option value="exact">Exact</option>
+              <option value="script">Script</option>
+              <option value="hosts">Hosts</option>
+            </select>
+            <select id="reqFilterStatus">
+              <option value="">所有状态</option>
+              <option value="2xx">2xx 成功</option>
+              <option value="3xx">3xx 重定向</option>
+              <option value="4xx">4xx 客户端错误</option>
+              <option value="5xx">5xx 服务端错误</option>
+            </select>
+            <input type="text" id="reqFilterURL" placeholder="搜索 URL..." class="filter-input">
           </div>
-          <div class="form-row">
-            <label>Path</label>
-            <input type="text" id="debugPath" placeholder="/cgi/capi?action=delegate&serviceType=apm" class="input-full">
-          </div>
-          <div class="form-row">
-            <label>Body (JSON)</label>
-            <textarea id="debugBody" rows="8" class="input-full" placeholder='{"cmd":"DescribeMetricRecords","serviceType":"apm","regionId":1}'></textarea>
-          </div>
-          <div class="form-row">
-            <label>Headers (one per line: Key: Value)</label>
-            <textarea id="debugHeaders" rows="3" class="input-full" placeholder="Content-Type: application/json&#10;X-Custom-Test: debug"></textarea>
-          </div>
-          <div class="form-row">
-            <label>Cookie</label>
-            <textarea id="debugCookie" rows="2" class="input-full" placeholder="uin=o700002591035; tinyid=700002591035; appid=260147315"></textarea>
-          </div>
-          <div class="form-row form-row-inline">
-            <label class="checkbox-label">
-              <input type="checkbox" id="debugDryRun" checked> Dry Run (skip backend)
-            </label>
-          </div>
-          <div class="form-row">
-            <label>Import from curl</label>
-            <textarea id="debugCurl" rows="5" class="input-full mono" placeholder="粘贴 curl 命令，自动解析 method/path/headers/cookie/body"></textarea>
-            <button class="btn btn-sm" id="btnDebugParseCurl" style="margin-top:6px">↪ Parse curl</button>
-          </div>
-          <button class="btn btn-primary btn-full" id="btnDebugRun">▶ Run Debug</button>
+          <div class="toolbar-spacer"></div>
+          <button class="btn btn-sm" id="btnReqTree">📂 树视图</button>
+          <button class="btn btn-sm" id="btnReqPause">⏸ 暂停</button>
+          <button class="btn btn-sm" id="btnReqRefresh">↻ 刷新</button>
+          <button class="btn btn-sm" id="btnReqClear">🗑 清空</button>
+          <span class="count" id="reqCount">0 events</span>
         </div>
-      </div>
-
-      <div class="debug-right">
-        <div class="debug-section-header">Execution Steps</div>
-        <div class="debug-steps" id="debugSteps">
-          <div class="debug-empty">Click "Run Debug" to see step-by-step execution</div>
+        <div class="req-table-wrap">
+          <table class="log-table req-table">
+            <thead>
+              <tr>
+                <th class="col-time">时间</th>
+                <th class="col-type">类型</th>
+                <th class="col-method">方法</th>
+                <th class="col-url">URL</th>
+                <th class="col-status">状态</th>
+                <th class="col-ctype">类型</th>
+                <th class="col-size">大小</th>
+                <th class="col-latency">耗时</th>
+                <th class="col-script">脚本</th>
+                <th class="col-ruletype">规则</th>
+                <th class="col-target">目标</th>
+              </tr>
+            </thead>
+            <tbody id="reqBody"></tbody>
+          </table>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ Requests Tab ============ -->
-  <section id="tab-requests" class="tab-content">
-    <div class="toolbar">
-      <div class="filter-group">
-        <select id="reqFilterType">
-          <option value="">All Types</option>
-          <option value="match">Match</option>
-          <option value="replay">Replay</option>
-          <option value="forward">Forward</option>
-          <option value="tunnel">Tunnel</option>
-          <option value="error">Error</option>
-        </select>
-        <select id="reqFilterScript">
-          <option value="">All Scripts</option>
-        </select>
-        <select id="reqFilterRuleType">
-          <option value="">All Rule Types</option>
-          <option value="proxy">Proxy</option>
-          <option value="exact">Exact</option>
-          <option value="script">Script</option>
-          <option value="hosts">Hosts</option>
-        </select>
-        <select id="reqFilterStatus">
-          <option value="">All Status</option>
-          <option value="2xx">2xx Success</option>
-          <option value="3xx">3xx Redirect</option>
-          <option value="4xx">4xx Client Error</option>
-          <option value="5xx">5xx Server Error</option>
-        </select>
-        <input type="text" id="reqFilterURL" placeholder="Search URL..." class="filter-input">
-      </div>
-      <div class="toolbar-spacer"></div>
-      <button class="btn btn-sm" id="btnReqTree">📂 Tree</button>
-      <button class="btn btn-sm" id="btnReqPause">⏸ Pause</button>
-      <button class="btn btn-sm" id="btnReqRefresh">↻ Refresh</button>
-      <button class="btn btn-sm" id="btnReqClear">🗑 Clear</button>
-      <span class="count" id="reqCount">0 events</span>
-    </div>
-    <div class="req-table-wrap">
-      <table class="log-table req-table">
-        <thead>
-          <tr>
-            <th class="col-time">Time</th>
-            <th class="col-type">Type</th>
-            <th class="col-method">Method</th>
-            <th class="col-url">URL</th>
-            <th class="col-status">Status</th>
-            <th class="col-ctype">Type</th>
-            <th class="col-size">Size</th>
-            <th class="col-latency">Latency</th>
-            <th class="col-script">Script</th>
-            <th class="col-ruletype">Rule</th>
-            <th class="col-target">Target</th>
-          </tr>
-        </thead>
-        <tbody id="reqBody"></tbody>
-      </table>
-    </div>
-    <div class="req-detail-panel" id="reqDetailPanel" style="display:none">
-      <div class="req-detail-header">
-        <span class="req-detail-title" id="reqDetailTitle">Request Detail</span>
-        <div class="req-detail-tabs" id="reqDetailTabs">
-          <button class="req-dtab active" data-dtab="overview">Overview</button>
-          <button class="req-dtab" data-dtab="request">Request</button>
-          <button class="req-dtab" data-dtab="backend" id="reqDtabBackend" style="display:none">Backend</button>
-          <button class="req-dtab" data-dtab="response">Response</button>
-        </div>
-        <button class="btn btn-sm" id="btnReqResend" title="Edit &amp; Resend">↻ Resend</button>
-        <button class="btn btn-sm" id="btnReqDetailClose">✕</button>
-      </div>
-      <div class="req-detail-body">
-        <!-- Normal tabs -->
-        <div id="reqNormalView">
-          <div class="req-dtab-content active" id="dt-Overview"></div>
-          <div class="req-dtab-content" id="dt-Request"></div>
-          <div class="req-dtab-content" id="dt-Backend"></div>
-          <div class="req-dtab-content" id="dt-Response"></div>
-        </div>
-        <!-- Resend editor (hidden by default) -->
-        <div id="reqResendView" style="display:none">
-          <div class="resend-form">
-            <div class="resend-row">
-              <select id="resendMethod" class="resend-method">
-                <option>GET</option><option selected>POST</option><option>PUT</option>
-                <option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
-              </select>
-              <input type="text" id="resendURL" class="resend-url" placeholder="https://example.com/api">
+        <div class="req-detail-panel" id="reqDetailPanel" style="display:none">
+          <div class="req-detail-header">
+            <span class="req-detail-title" id="reqDetailTitle">Request Detail</span>
+            <div class="req-detail-tabs" id="reqDetailTabs">
+              <button class="req-dtab active" data-dtab="overview">概览</button>
+              <button class="req-dtab" data-dtab="request">请求</button>
+              <button class="req-dtab" data-dtab="backend" id="reqDtabBackend" style="display:none">Backend</button>
+              <button class="req-dtab" data-dtab="response">响应</button>
             </div>
-            <div class="resend-section">
-              <h4>Headers</h4>
-              <textarea id="resendHeaders" class="resend-textarea resend-headers" rows="5" placeholder="Content-Type: application/json&#10;Authorization: Bearer xxx"></textarea>
+            <button class="btn btn-sm" id="btnReqResend" title="编辑并重发">↻ 重发</button>
+            <button class="btn btn-sm" id="btnReqDetailClose">✕</button>
+          </div>
+          <div class="req-detail-body">
+            <div id="reqNormalView">
+              <div class="req-dtab-content active" id="dt-Overview"></div>
+              <div class="req-dtab-content" id="dt-Request"></div>
+              <div class="req-dtab-content" id="dt-Backend"></div>
+              <div class="req-dtab-content" id="dt-Response"></div>
             </div>
-            <div class="resend-section">
-              <h4>Body</h4>
-              <textarea id="resendBody" class="resend-textarea resend-body" rows="10" placeholder='{"key": "value"}'></textarea>
-            </div>
-            <div class="resend-actions">
-              <button class="btn btn-sm" id="btnResendCancel">Cancel</button>
-              <button class="btn btn-primary btn-sm" id="btnResendSend">▶ Send</button>
-              <span class="resend-status" id="resendStatus"></span>
-            </div>
-            <div class="resend-response" id="resendResponse" style="display:none">
-              <h4>Response <span id="resendRespStatus"></span></h4>
-              <pre id="resendRespBody"></pre>
+            <div id="reqResendView" style="display:none">
+              <div class="resend-form">
+                <div class="resend-row">
+                  <select id="resendMethod" class="resend-method">
+                    <option>GET</option><option selected>POST</option><option>PUT</option>
+                    <option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option>
+                  </select>
+                  <input type="text" id="resendURL" class="resend-url" placeholder="https://example.com/api">
+                </div>
+                <div class="resend-section">
+                  <h4>Headers</h4>
+                  <textarea id="resendHeaders" class="resend-textarea resend-headers" rows="5" placeholder="Content-Type: application/json&#10;Authorization: Bearer xxx"></textarea>
+                </div>
+                <div class="resend-section">
+                  <h4>Body</h4>
+                  <textarea id="resendBody" class="resend-textarea resend-body" rows="10" placeholder='{"key": "value"}'></textarea>
+                </div>
+                <div class="resend-actions">
+                  <button class="btn btn-sm" id="btnResendCancel">取消</button>
+                  <button class="btn btn-primary btn-sm" id="btnResendSend">▶ 发送</button>
+                  <span class="resend-status" id="resendStatus"></span>
+                </div>
+                <div class="resend-response" id="resendResponse" style="display:none">
+                  <h4>响应 <span id="resendRespStatus"></span></h4>
+                  <pre id="resendRespBody"></pre>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  </section>
+      </section>
 
-  <!-- ============ Status Tab ============ -->
-  <section id="tab-status" class="tab-content">
-    <div class="status-grid">
-      <div class="stat-card"><div class="stat-label">Uptime</div><div class="stat-value" id="statUptime">--</div></div>
-      <div class="stat-card"><div class="stat-label">Total Requests</div><div class="stat-value" id="statTotalReqs">--</div></div>
-      <div class="stat-card"><div class="stat-label">Total Errors</div><div class="stat-value stat-error" id="statTotalErrs">--</div></div>
-      <div class="stat-card"><div class="stat-label">MITM Active</div><div class="stat-value" id="statMitmActive">--</div></div>
-      <div class="stat-card"><div class="stat-label">MITM Evicted</div><div class="stat-value stat-warn" id="statMitmEvicted">--</div></div>
-      <div class="stat-card"><div class="stat-label">Rule Scripts</div><div class="stat-value" id="statScripts">--</div></div>
-      <div class="stat-card"><div class="stat-label">Total Rules</div><div class="stat-value" id="statRules">--</div></div>
-      <div class="stat-card"><div class="stat-label">Total Hits</div><div class="stat-value stat-ok" id="statHits">--</div></div>
-    </div>
+      <!-- ============ Status Tab ============ -->
+      <section id="tab-status" class="tab-content">
+        <div class="status-grid">
+          <div class="stat-card"><div class="stat-label">运行时长</div><div class="stat-value" id="statUptime">--</div></div>
+          <div class="stat-card"><div class="stat-label">总请求数</div><div class="stat-value" id="statTotalReqs">--</div></div>
+          <div class="stat-card"><div class="stat-label">总错误数</div><div class="stat-value stat-error" id="statTotalErrs">--</div></div>
+          <div class="stat-card"><div class="stat-label">MITM 活跃</div><div class="stat-value" id="statMitmActive">--</div></div>
+          <div class="stat-card"><div class="stat-label">MITM 驱逐</div><div class="stat-value stat-warn" id="statMitmEvicted">--</div></div>
+          <div class="stat-card"><div class="stat-label">规则脚本</div><div class="stat-value" id="statScripts">--</div></div>
+          <div class="stat-card"><div class="stat-label">总规则数</div><div class="stat-value" id="statRules">--</div></div>
+          <div class="stat-card"><div class="stat-label">总命中数</div><div class="stat-value stat-ok" id="statHits">--</div></div>
+        </div>
 
-    <div class="ca-status-card" id="caStatusCard">
-      <h4>🔐 CA 证书</h4>
-      <div class="ca-status-body" id="caStatusBody">Loading...</div>
-    </div>
+        <div class="ca-status-card" id="caStatusCard">
+          <h4>🔐 CA 证书</h4>
+          <div class="ca-status-body" id="caStatusBody">加载中...</div>
+        </div>
 
-    <div class="diag-header">
-      <h3 class="section-title">🔍 代理匹配诊断</h3>
-      <button class="btn btn-sm" id="btnRefreshDiag">↻ Refresh</button>
-      <span class="count" id="diagMatchCount">0 matches</span>
-    </div>
+        <div class="diag-header">
+          <h3 class="section-title">🔍 代理匹配诊断</h3>
+          <button class="btn btn-sm" id="btnRefreshDiag">↻ 刷新</button>
+          <span class="count" id="diagMatchCount">0 matches</span>
+        </div>
 
-    <div class="diag-script-cards" id="diagScriptCards"></div>
+        <div class="diag-script-cards" id="diagScriptCards"></div>
 
-    <div class="diag-tabs">
-      <button class="diag-tab active" data-tab="proxy">Proxy 代理</button>
-      <button class="diag-tab" data-tab="script">Script 脚本</button>
-    </div>
+        <div class="diag-tabs">
+          <button class="diag-tab active" data-tab="proxy">Proxy 代理</button>
+          <button class="diag-tab" data-tab="script">Script 脚本</button>
+        </div>
 
-    <div class="panel diag-panel">
-      <table class="data-table diag-table">
-        <thead><tr>
-          <th style="width:90px">Time</th>
-          <th style="width:60px">Method</th>
-          <th>Source URL</th>
-          <th style="width:200px">→ Target</th>
-          <th style="width:140px">Script</th>
-          <th style="width:60px">Status</th>
-          <th style="width:70px">Lat</th>
-        </tr></thead>
-        <tbody id="diagMatchBody"><tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:20px">Loading...</td></tr></tbody>
-      </table>
-    </div>
+        <div class="panel diag-panel">
+          <table class="data-table diag-table">
+            <thead><tr>
+              <th style="width:90px">时间</th>
+              <th style="width:60px">方法</th>
+              <th>来源 URL</th>
+              <th style="width:200px">→ 目标</th>
+              <th style="width:140px">脚本</th>
+              <th style="width:60px">状态</th>
+              <th style="width:70px">耗时</th>
+            </tr></thead>
+            <tbody id="diagMatchBody"><tr><td colspan="7" style="color:var(--text-muted);text-align:center;padding:20px">加载中...</td></tr></tbody>
+          </table>
+        </div>
 
-    <h3 class="section-title" style="margin-top:12px">Top Paths</h3>
-      <table class="data-table">
-        <thead><tr><th>Path</th><th>Count</th><th>Avg ms</th><th>Max ms</th><th>Errors</th></tr></thead>
-        <tbody id="topPathsBody"></tbody>
-      </table>
-    </div>
-  </section>
+        <h3 class="section-title" style="margin-top:12px">Top Paths</h3>
+        <table class="data-table">
+          <thead><tr><th>路径</th><th>次数</th><th>平均 ms</th><th>最大 ms</th><th>错误</th></tr></thead>
+          <tbody id="topPathsBody"></tbody>
+        </table>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <span>MITM :8081</span>
+    <span>UI :8082</span>
+    <span class="statusbar-right">mitm-proxy</span>
+  </footer>
 
   <!-- ============ New Script Dialog ============ -->
   <div class="modal-overlay" id="modalOverlay" style="display:none">
     <div class="modal">
-      <h3>New Rule Script</h3>
+      <h3>新建规则脚本</h3>
       <div class="form-group">
-        <label>Script Name</label>
-        <input type="text" id="newScriptName" placeholder="e.g. my-dev-rules" autofocus>
+        <label>脚本名称</label>
+        <input type="text" id="newScriptName" placeholder="例如 my-dev-rules" autofocus>
       </div>
       <div class="form-group">
-        <label>Initial Content (optional)</label>
+        <label>初始内容（可选）</label>
         <textarea id="newScriptContent" rows="8" placeholder='@name "My Rules"
 @priority 50
 
-# Add your rules here
+# 在此添加规则
 # @intercept example.com
 # /\/api\/(.*)/ http://localhost:3000/$1'></textarea>
       </div>
       <div class="modal-actions">
-        <button class="btn" id="btnCancelNew">Cancel</button>
-        <button class="btn btn-primary" id="btnConfirmNew">Create</button>
+        <button class="btn" id="btnCancelNew">取消</button>
+        <button class="btn btn-primary" id="btnConfirmNew">创建</button>
       </div>
     </div>
   </div>
