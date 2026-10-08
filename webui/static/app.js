@@ -197,6 +197,14 @@
     return String(n);
   }
 
+  function fmtBytes(bytes) {
+    if (bytes == null) return '--';
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return bytes + ' B';
+  }
+
   function statusClass(code) {
     if (!code || code === 0) return '';
     return code < 300 ? 'status-ok' : code < 400 ? 'status-redirect' : 'status-error';
@@ -1578,6 +1586,7 @@
       $('#statTotalErrs').textContent = fmtNumber(debug.total_errors);
       if (debug.conn_pool) { $('#statMitmActive').textContent = debug.conn_pool.active_mitm; $('#statMitmEvicted').textContent = debug.conn_pool.total_evicted; }
       if (status.rules) { $('#statScripts').textContent = status.rules.enabled_scripts + '/' + status.rules.total_scripts; $('#statRules').textContent = status.rules.total_rules; $('#statHits').textContent = fmtNumber(status.rules.total_hits); }
+      if (status.runtime) { $('#statGoroutines').textContent = fmtNumber(status.runtime.goroutines); $('#statHeapAlloc').textContent = fmtBytes(status.runtime.heap_alloc_bytes); $('#statNumGC').textContent = fmtNumber(status.runtime.num_gc); }
       $('#uptimeValue').textContent = '⏱ ' + fmtUptime(debug.uptime_sec);
       const tbody = $('#topPathsBody');
       tbody.innerHTML = '';

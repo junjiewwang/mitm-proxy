@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 	"mitm-proxy/core/ca"
 	"mitm-proxy/core/dispatch"
+	"mitm-proxy/core/metrics"
 	"mitm-proxy/core/replay"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
@@ -44,6 +46,12 @@ type Config struct {
 		Enable     bool `yaml:"enable"`
 		BufferSize int  `yaml:"buffer_size"`
 	} `yaml:"debug"`
+	Observability struct {
+		PprofAddr         string        `yaml:"pprof_addr"`
+		MonitorInterval   time.Duration `yaml:"monitor_interval"`
+		GoroutineThreshold int          `yaml:"goroutine_threshold"`
+		DumpDir           string        `yaml:"dump_dir"`
+	} `yaml:"observability"`
 }
 
 // proxyConfig 将 Config.Proxy 转换为 ProxyConfig
@@ -79,6 +87,19 @@ func loadConfig(path string) (*Config, error) {
 	}
 	if cfg.Rules.WatchInterval == 0 {
 		cfg.Rules.WatchInterval = 2 * time.Second
+	}
+	// 可观测性默认值
+	if cfg.Observability.PprofAddr == "" {
+		cfg.Observability.PprofAddr = ":6060"
+	}
+	if cfg.Observability.MonitorInterval == 0 {
+		cfg.Observability.MonitorInterval = 30 * time.Second
+	}
+	if cfg.Observability.GoroutineThreshold == 0 {
+		cfg.Observability.GoroutineThreshold = 1000
+	}
+	if cfg.Observability.DumpDir == "" {
+		cfg.Observability.DumpDir = "/tmp"
 	}
 	// 加载 hosts 文件（Whistle 格式：IP domain）
 	if cfg.Proxy.UpstreamMap == nil {
@@ -149,6 +170,10 @@ func main() {
 
 	// 初始化诊断收集器
 	initDebugCollector()
+
+	// 可观测性：pprof 诊断端口 + 运行时指标监控
+	startPprofServer(cfg.Observability.PprofAddr)
+	startRuntimeMonitor(cfg.Observability.MonitorInterval, cfg.Observability.GoroutineThreshold, cfg.Observability.DumpDir)
 
 	// ========================================
 	// JS 脚本运行时初始化
@@ -222,6 +247,9 @@ func main() {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	// Prometheus 自监控端点
+	ginEngine.GET("/metrics", gin.WrapH(metrics.Handler()))
+
 	// 规则管理 REST API
 	registerRuleAPI(ginEngine, ruleManager)
 
@@ -272,6 +300,17 @@ type proxyStatusProvider struct {
 
 func (p *proxyStatusProvider) GetStatus() map[string]interface{} {
 	status := make(map[string]interface{})
+
+	// 运行时指标：goroutine 数 + 内存（定位泄漏的关键）
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	status["runtime"] = map[string]interface{}{
+		"goroutines":        runtime.NumGoroutine(),
+		"heap_alloc_bytes":  ms.HeapAlloc,
+		"heap_inuse_bytes":  ms.HeapInuse,
+		"heap_sys_bytes":    ms.HeapSys,
+		"num_gc":            ms.NumGC,
+	}
 
 	if p.collector != nil {
 		_, totalReqs, totalErrs, uptime := p.collector.Snapshot()

@@ -26,3 +26,10 @@ webui:
 debug:
   enable: true
   buffer_size: 200
+
+# 可观测性：pprof + 运行时监控 + Prometheus 自监控
+observability:
+  pprof_addr: ":6060"        # pprof 诊断端口
+  monitor_interval: 30s      # 指标日志采集间隔
+  goroutine_threshold: 1000  # goroutine 超阈值自动 dump 栈
+  dump_dir: "/tmp"           # dump 文件目录

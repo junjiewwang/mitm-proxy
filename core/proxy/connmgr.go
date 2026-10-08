@@ -6,6 +6,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"mitm-proxy/core/metrics"
 )
 
 // ========================================
@@ -40,11 +42,15 @@ func NewConnManager(maxConns int, idleTimeout time.Duration) *ConnManager {
 	if idleTimeout <= 0 {
 		idleTimeout = 10 * time.Second
 	}
-	return &ConnManager{
+	cm := &ConnManager{
 		slots:       make([]*connSlot, 0, maxConns),
 		MaxConns:    maxConns,
 		idleTimeout: idleTimeout,
 	}
+	metrics.SetMITMConnections("max", float64(maxConns))
+	metrics.SetMITMConnections("active", 0)
+	metrics.SetMITMConnections("evicted", 0)
+	return cm
 }
 
 // Stats 返回连接统计
@@ -59,6 +65,7 @@ func (m *ConnManager) Stats() (active, evicted int64) {
 func (m *ConnManager) Register(id string, conn net.Conn) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer metrics.SetMITMConnections("active", float64(len(m.slots)))
 
 	now := time.Now()
 
@@ -79,6 +86,7 @@ func (m *ConnManager) Register(id string, conn net.Conn) bool {
 	old := m.slots[evictedIdx]
 	old.conn.Close()
 	m.evicted++
+	metrics.SetMITMConnections("evicted", float64(m.evicted))
 
 	// 删除旧槽位，插入新槽位到头部
 	m.slots = append(m.slots[:evictedIdx], m.slots[evictedIdx+1:]...)
@@ -112,6 +120,7 @@ func (m *ConnManager) Touch(id string) {
 func (m *ConnManager) Unregister(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	defer metrics.SetMITMConnections("active", float64(len(m.slots)))
 
 	for i, s := range m.slots {
 		if s.id == id {

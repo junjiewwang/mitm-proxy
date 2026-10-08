@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"mitm-proxy/core/metrics"
 )
 
 // ProxyConfig 正向代理配置
@@ -192,6 +194,7 @@ func (p *ForwardProxy) shouldIntercept(hostname string) bool {
 // handleTunnel 直接透传隧道（不解密）
 func (p *ForwardProxy) handleTunnel(w http.ResponseWriter, r *http.Request, targetHost string) {
 	p.recordTunnel(targetHost)
+	metrics.RecordRequest("tunnel")
 
 	// 解析上游地址（优先使用配置的映射）
 	hostname, port := splitHostPort(targetHost)
@@ -451,6 +454,11 @@ func (p *ForwardProxy) handleMITM(w http.ResponseWriter, r *http.Request, hostna
 // 注意：返回的 resp.Body 需要调用方在写完后 Close，以释放上游连接回连接池
 func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Response {
 	startTime := time.Now()
+	metrics.RecordRequest("proxy")
+	defer func() {
+		metrics.ObserveRequestDuration(time.Since(startTime).Seconds())
+	}()
+
 	method := r.Method
 	path := r.URL.Path
 	if r.URL.RawQuery != "" {
@@ -470,6 +478,7 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	if err != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> CREATE ERR: %v", method, path, err)
 		p.recordForward(method, hostname, path, 0, time.Since(startTime), false, err.Error())
+		metrics.RecordError()
 		return BuildErrorResponse(http.StatusBadGateway, "create upstream request failed")
 	}
 
@@ -497,6 +506,7 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	if err != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> ERR (%.0fms): %v", method, path, time.Since(startTime).Seconds()*1000, err)
 		p.recordForward(method, hostname, path, 0, time.Since(startTime), false, err.Error())
+		metrics.RecordError()
 		return BuildErrorResponse(http.StatusBadGateway, "upstream request failed")
 	}
 
@@ -515,8 +525,12 @@ func (p *ForwardProxy) processForward(r *http.Request, hostname string) *http.Re
 	if readErr != nil {
 		log.Printf("[Proxy] [FWD] %s %s -> read body ERR: %v", method, path, readErr)
 		p.recordForward(method, hostname, path, resp.StatusCode, time.Since(startTime), false, readErr.Error())
+		metrics.RecordError()
 		return BuildErrorResponse(http.StatusBadGateway, "read upstream response failed")
 	}
+
+	// 记录上游转发耗时（Do + ReadAll 完成）
+	metrics.ObserveUpstreamDuration(time.Since(startTime).Seconds())
 
 	// 复制响应 Header（排除 hop-by-hop）
 	respHeader := make(http.Header)

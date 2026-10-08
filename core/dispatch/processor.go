@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"mitm-proxy/core/metrics"
 	"mitm-proxy/core/proxy"
 	"mitm-proxy/core/script"
 	"mitm-proxy/rule"
@@ -62,6 +63,11 @@ func (d *ProcessorDispatcher) RegisterHandler(rt proxy.RuleType, h RuleHandler) 
 // Process 实现 proxy.RequestProcessor 接口
 func (d *ProcessorDispatcher) Process(req *http.Request, body []byte, match *proxy.MatchResult) *http.Response {
 	start := time.Now()
+	metrics.RecordRequest("script")
+	metrics.RecordRuleHit(match.ScriptName)
+	defer func() {
+		metrics.ObserveRequestDuration(time.Since(start).Seconds())
+	}()
 
 	if match.CORS && req.Method == http.MethodOptions {
 		resp := d.buildCORSPreflightResponse(req)
